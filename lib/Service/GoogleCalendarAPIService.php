@@ -180,6 +180,26 @@ class GoogleCalendarAPIService {
 			}
 		}
 
+		// Cancelled instances of a recurring series come back from Google as
+		// separate events with status:cancelled, recurringEventId, and
+		// originalStartTime — but no start/end. Emit them as EXDATE lines on
+		// the master so the instance disappears from the recurrence.
+		$isMaster = !isset($e['recurringEventId']);
+		if ($isMaster) {
+			foreach ($exceptions as $candidateException) {
+				if (
+					($candidateException['recurringEventId'] ?? null) === $e['id']
+					&& ($candidateException['status'] ?? null) === 'cancelled'
+					&& isset($candidateException['originalStartTime'])
+				) {
+					$exdate = $this->mapTime($candidateException['originalStartTime']);
+					if ($exdate !== '') {
+						$eventData .= "EXDATE;$exdate\n";
+					}
+				}
+			}
+		}
+
 		// skip entries without any date
 		if (!isset($e['start']) || !isset($e['end'])) {
 			return '';
@@ -205,7 +225,11 @@ class GoogleCalendarAPIService {
 			. 'END:VEVENT' . "\n";
 
 		foreach ($exceptions as $candidateException) {
-			if (($candidateException['recurringEventId'] == $e['id']) && ($candidateException['id'] != $e['id'])) {
+			if (
+				$candidateException['recurringEventId'] == $e['id']
+				&& $candidateException['id'] != $e['id']
+				&& ($candidateException['status'] ?? null) !== 'cancelled'
+			) {
 				$eventData .= $this->generateEventData($candidateException, $exceptions, $ncCalId, $eventColors);
 			}
 		}

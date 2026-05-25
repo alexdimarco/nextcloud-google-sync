@@ -5,6 +5,46 @@ Forked from: [MarcelRobitaille/nextcloud_google_synchronization](https://github.
 Fork home: [alexdimarco/nextcloud-google-sync](https://github.com/alexdimarco/nextcloud-google-sync)
 License: AGPL-3.0
 
+## 2026-05-25 — Phase 1, fix #1: cancelled recurring instances
+
+Fixes the "Test recurring with cancellation" failure flagged in
+`docs/PHASE_0_TEST_DATA.md` (row 5).
+
+- **Approach**: emit `EXDATE` lines on the master `VEVENT` rather than
+  attempting to synthesize `STATUS:CANCELLED` overrides. This reverses the
+  speculative preference noted in PROJECT_LOG question #6 — actually
+  implementing the override path required synthesizing DTSTART/DTEND from
+  the master's duration (Google omits dates for cancelled instances), and
+  EXDATE is simpler, universally supported by CalDAV clients, and matches
+  the "deleted in Google → gone in NC" UX users expect. The only
+  information loss is the explicit "cancelled vs. never scheduled"
+  semantic, which the previous code didn't surface either.
+- **Files touched**: `lib/Service/GoogleCalendarAPIService.php` only.
+  `generateEventData()` now partitions exceptions: cancelled ones become
+  EXDATE lines inside the master VEVENT; live (rescheduled) ones keep the
+  existing inline-override behavior.
+- **Verification**: deleted the locally-stored master for
+  `7nulnn1h3egv0n3kf8r0pdjpq6` in `oc_calendarobjects`, force-executed
+  the `ImportCalendarJob` for the primary calendar, and confirmed the
+  rewritten VCALENDAR contains
+  `EXDATE;TZID=America/New_York:20260524T150000` — exactly the 3rd
+  daily instance (Sun May 24), which is the instance deleted in Google.
+  The unrelated "Test recurring with exception" event was not re-touched
+  by the sync (Google's `updated` unchanged) and its inline override
+  remained intact, confirming no regression to the live-exception path.
+
+### Phase 1 punch list — remaining
+
+(From `docs/PHASE_0_TEST_DATA.md`, items not yet addressed.)
+
+- Emit `ATTENDEE` lines for `attendees[]`. (Test 7.)
+- Emit a `VTIMEZONE` block when DTSTART/DTEND use `TZID`. (Test 6 + audit.)
+- Bump `info.xml` `max-version` to 33 (and verify) so install on the lab
+  stops requiring `--force`.
+- Stand up a minimal PHPUnit suite before more changes land (decision
+  pending — see PROJECT_LOG q8).
+- Honor `nextSyncToken` so brand-new Google events don't miss a cron tick.
+
 ## 2026-05-20 — Phase 0 complete
 
 - Forked upstream to `alexdimarco/nextcloud-google-sync`. No PHP source modifications.
