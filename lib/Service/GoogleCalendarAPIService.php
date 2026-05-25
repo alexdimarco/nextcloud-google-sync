@@ -145,6 +145,15 @@ class GoogleCalendarAPIService {
 			$eventData .= 'LAST-MODIFIED:' . $updated->format('Ymd\THis\Z') . "\n";
 		}
 
+		if (isset($e['organizer']['email'])) {
+			$eventData .= $this->buildOrganizerLine($e['organizer']);
+		}
+		if (isset($e['attendees']) && is_array($e['attendees'])) {
+			foreach ($e['attendees'] as $a) {
+				$eventData .= $this->buildAttendeeLine($a);
+			}
+		}
+
 		if (isset($e['reminders'], $e['reminders']['useDefault']) && $e['reminders']['useDefault']) {
 			// 15 min before, default alarm
 			$eventData .= 'BEGIN:VALARM' . "\n"
@@ -284,6 +293,61 @@ class GoogleCalendarAPIService {
 	 */
 	private function colorDiff(array $rgb1, array $rgb2): int|float {
 		return abs($rgb1['r'] - $rgb2['r']) + abs($rgb1['g'] - $rgb2['g']) + abs($rgb1['b'] - $rgb2['b']);
+	}
+
+	/**
+	 * @param array{email?: string, displayName?: string} $organizer
+	 */
+	private function buildOrganizerLine(array $organizer): string {
+		$email = (string)($organizer['email'] ?? '');
+		if ($email === '') {
+			return '';
+		}
+		$line = 'ORGANIZER';
+		if (isset($organizer['displayName']) && $organizer['displayName'] !== '') {
+			$line .= ';CN=' . $this->quoteIcalParam((string)$organizer['displayName']);
+		}
+		return $line . ':mailto:' . $email . "\n";
+	}
+
+	/**
+	 * @param array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool} $attendee
+	 */
+	private function buildAttendeeLine(array $attendee): string {
+		$email = (string)($attendee['email'] ?? '');
+		if ($email === '') {
+			return '';
+		}
+		$params = [];
+		if (isset($attendee['displayName']) && $attendee['displayName'] !== '') {
+			$params[] = 'CN=' . $this->quoteIcalParam((string)$attendee['displayName']);
+		}
+		if (isset($attendee['resource']) && $attendee['resource']) {
+			$params[] = 'CUTYPE=RESOURCE';
+		}
+		$params[] = 'ROLE=' . ((isset($attendee['optional']) && $attendee['optional']) ? 'OPT-PARTICIPANT' : 'REQ-PARTICIPANT');
+		if (isset($attendee['responseStatus'])) {
+			$partstat = match ($attendee['responseStatus']) {
+				'accepted' => 'ACCEPTED',
+				'declined' => 'DECLINED',
+				'tentative' => 'TENTATIVE',
+				'needsAction' => 'NEEDS-ACTION',
+				default => null,
+			};
+			if ($partstat !== null) {
+				$params[] = 'PARTSTAT=' . $partstat;
+			}
+		}
+		return 'ATTENDEE;' . implode(';', $params) . ':mailto:' . $email . "\n";
+	}
+
+	/**
+	 * Wrap an iCal parameter value in double quotes (always-quote is always
+	 * valid per RFC 5545 §3.1). Strips CR/LF (forbidden in params) and
+	 * substitutes single quotes for embedded double quotes.
+	 */
+	private function quoteIcalParam(string $value): string {
+		return '"' . str_replace(["\r", "\n", '"'], ['', '', "'"], $value) . '"';
 	}
 
 	/**
