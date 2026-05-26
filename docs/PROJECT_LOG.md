@@ -5,6 +5,47 @@ Forked from: [MarcelRobitaille/nextcloud_google_synchronization](https://github.
 Fork home: [alexdimarco/nextcloud-google-sync](https://github.com/alexdimarco/nextcloud-google-sync)
 License: AGPL-3.0
 
+## 2026-05-25 — Phase 1, fix #2: ORGANIZER and ATTENDEE emission
+
+Fixes the "Test multi-attendee" failure flagged in `docs/PHASE_0_TEST_DATA.md`
+(row 7) and the corresponding audit finding ("Attendees are silently
+dropped").
+
+- **Files touched**: `lib/Service/GoogleCalendarAPIService.php` only. Added
+  `buildOrganizerLine()`, `buildAttendeeLine()`, `quoteIcalParam()`
+  private helpers; called from `generateEventData()` immediately after
+  the `LAST-MODIFIED` block, before `VALARM`.
+- **Mapping**:
+  - `$e['organizer'].email` → `ORGANIZER[;CN="..."]:mailto:...`
+  - `$e['attendees'][]` → `ATTENDEE;[CN="..."];[CUTYPE=RESOURCE];ROLE=REQ-|OPT-PARTICIPANT;[PARTSTAT=...]:mailto:...`
+  - `responseStatus`: accepted/declined/tentative/needsAction → matching `PARTSTAT`
+  - `optional: true` → `ROLE=OPT-PARTICIPANT` (else REQ-)
+  - `resource: true` → `CUTYPE=RESOURCE`
+  - `displayName` (when present) → `CN="..."` with always-quoted param value
+- **Verification**: deleted the local copy of `7fmmi9c0vudpl72j1tkjlmamga`
+  ("Test multi-attendee"), force-executed the primary-calendar sync,
+  inspected the rewritten ICS. Output:
+  ```
+  ORGANIZER:mailto:dimarcotech@gmail.com
+  ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:fake1@example.com
+  ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:dimarcotech@gmail.com
+  ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:fake2@example.com
+  ```
+  All three attendees + the organizer present. PARTSTAT mapping correct
+  (Google's `needsAction` → `NEEDS-ACTION`, `accepted` → `ACCEPTED`).
+- **Coverage gap** (worth knowing): The test event doesn't exercise the
+  `CN=` (displayName), `OPT-PARTICIPANT` (optional), `TENTATIVE`/`DECLINED`
+  PARTSTAT, or `CUTYPE=RESOURCE` branches — the fake attendees lack
+  displayNames and no organic event in the lab account got re-imported
+  in this sync (Google's `updated` field didn't change for any of them).
+  All four branches are simple deterministic mappings; the risk of bug
+  is low, but a follow-up spot-check on a real meeting invite is worth
+  doing.
+- **Migration note**: Existing imported events keep their attendee-less
+  ICS until they're re-touched by a sync (which only happens when Google
+  reports a newer `updated` timestamp). A one-shot "force re-import all"
+  is out of scope for this fix.
+
 ## 2026-05-25 — Phase 1, fix #1: cancelled recurring instances
 
 Fixes the "Test recurring with cancellation" failure flagged in
