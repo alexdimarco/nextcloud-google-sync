@@ -351,6 +351,83 @@ class GoogleCalendarAPIService {
 	}
 
 	/**
+	 * Return the unique TZID values referenced by a chunk of iCal text.
+	 *
+	 * Matches the `TZID=...` form that mapTime() emits on DTSTART, DTEND,
+	 * EXDATE, RECURRENCE-ID. Case-insensitive on the keyword; preserves the
+	 * TZID value as written.
+	 */
+	private function extractTzids(string $icalText): array {
+		preg_match_all('/(?:^|;)TZID=([^:;\r\n]+)/i', $icalText, $matches);
+		return array_values(array_unique($matches[1] ?? []));
+	}
+
+	/**
+	 * Emit a VTIMEZONE block for an IANA TZID, with one STANDARD and (if the
+	 * zone observes DST) one DAYLIGHT subcomponent populated from the most
+	 * recent transition of each kind. No RRULE is emitted — clients with a
+	 * tz database (all modern ones) resolve future dates from the TZID
+	 * itself; the subcomponents anchor the offset for the current era.
+	 *
+	 * Returns an empty string if the TZID isn't resolvable.
+	 */
+	private function buildVTimezoneBlock(string $tzid): string {
+		try {
+			$tz = new DateTimeZone($tzid);
+		} catch (Exception $e) {
+			return '';
+		}
+
+		$now = time();
+		$transitions = $tz->getTransitions($now - 60 * 60 * 24 * 400, $now + 60 * 60 * 24 * 400);
+		if (!$transitions) {
+			return '';
+		}
+
+		$standard = null;
+		$daylight = null;
+		foreach ($transitions as $i => $t) {
+			$prev = $i > 0 ? $transitions[$i - 1] : $t;
+			if ($t['isdst']) {
+				$daylight = ['t' => $t, 'prev' => $prev];
+			} else {
+				$standard = ['t' => $t, 'prev' => $prev];
+			}
+		}
+
+		$block = "BEGIN:VTIMEZONE\nTZID:" . $tzid . "\n";
+		if ($standard !== null) {
+			$block .= $this->buildVTimezoneSubcomponent('STANDARD', $standard['t'], $standard['prev']);
+		}
+		if ($daylight !== null) {
+			$block .= $this->buildVTimezoneSubcomponent('DAYLIGHT', $daylight['t'], $daylight['prev']);
+		}
+		return $block . "END:VTIMEZONE\n";
+	}
+
+	/**
+	 * @param array{ts: int, offset: int, isdst: bool, abbr: string, time: string} $t
+	 * @param array{ts: int, offset: int, isdst: bool, abbr: string, time: string} $prev
+	 */
+	private function buildVTimezoneSubcomponent(string $kind, array $t, array $prev): string {
+		// DTSTART in a VTIMEZONE subcomponent is local clock time at the
+		// moment of transition, expressed using the previous offset.
+		$localTs = $t['ts'] + $prev['offset'];
+		$dtstart = gmdate('Ymd\THis', $localTs);
+		return 'BEGIN:' . $kind . "\n"
+			. 'DTSTART:' . $dtstart . "\n"
+			. 'TZOFFSETFROM:' . $this->formatTzOffset($prev['offset']) . "\n"
+			. 'TZOFFSETTO:' . $this->formatTzOffset($t['offset']) . "\n"
+			. 'END:' . $kind . "\n";
+	}
+
+	private function formatTzOffset(int $seconds): string {
+		$sign = $seconds < 0 ? '-' : '+';
+		$abs = abs($seconds);
+		return sprintf('%s%02d%02d', $sign, intdiv($abs, 3600), intdiv($abs % 3600, 60));
+	}
+
+	/**
 	 * Get last modified timestamp from the calendar data of a calendar object
 	 *
 	 * @param string $calData
@@ -512,9 +589,15 @@ class GoogleCalendarAPIService {
 				continue;
 			}
 
+			$vtimezones = '';
+			foreach ($this->extractTzids($eventData) as $tzid) {
+				$vtimezones .= $this->buildVTimezoneBlock($tzid);
+			}
+
 			$calData = 'BEGIN:VCALENDAR' . "\n"
 				. 'VERSION:2.0' . "\n"
 				. 'PRODID:NextCloud Calendar' . "\n"
+				. $vtimezones
 				. $eventData
 				. 'END:VCALENDAR';
 
