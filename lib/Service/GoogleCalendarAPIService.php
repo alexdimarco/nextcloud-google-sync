@@ -503,7 +503,7 @@ class GoogleCalendarAPIService {
 	 * @param string $calId
 	 * @param string $calName
 	 * @param ?string $color
-	 * @return array{nbAdded: int, nbUpdated: int, nbDeleted: int, calName: string}
+	 * @return array{error: string}|array{nbAdded: int, nbUpdated: int, nbDeleted: int, calName: string}
 	 */
 	public function importCalendar(string $userId, string $calId, string $calName, ?string $color = null): array {
 		$params = [];
@@ -708,6 +708,17 @@ class GoogleCalendarAPIService {
 			} elseif (is_array($genReturn) && !empty($genReturn['nextSyncToken'])) {
 				$this->config->setUserValue($userId, Application::APP_ID, $syncTokenKey, $genReturn['nextSyncToken']);
 			}
+		}
+
+		// Surface API errors to the caller. BackgroundJob and Controller
+		// both already check `isset($result['error'])`, but pre-Phase-2 the
+		// check was dormant because importCalendar() always returned the
+		// success shape — so a fully failed sync (e.g. expired token, 5xx,
+		// 404 on a bad calId) silently looked like "Added 0" in the cron
+		// output and a 200 in the API. Now the error propagates and those
+		// checks fire.
+		if (is_array($genReturn) && isset($genReturn['error'])) {
+			return ['error' => $genReturn['error']];
 		}
 
 		return [
