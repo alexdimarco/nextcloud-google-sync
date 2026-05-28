@@ -472,7 +472,7 @@ class GoogleCalendarAPIService {
 	 * @param string $calId
 	 * @param string $calName
 	 * @param ?string $color
-	 * @return array{error: string}|array{nbAdded: int, nbUpdated: int, calName: string}
+	 * @return array{error: string}|array{nbAdded: int, nbUpdated: int, nbDeleted: int, calName: string}
 	 */
 	public function safeImportCalendar(string $userId, string $calId, string $calName, ?string $color = null): array {
 		$startTime = microtime(true);
@@ -503,7 +503,7 @@ class GoogleCalendarAPIService {
 	 * @param string $calId
 	 * @param string $calName
 	 * @param ?string $color
-	 * @return array{nbAdded: int, nbUpdated: int, calName: string}
+	 * @return array{nbAdded: int, nbUpdated: int, nbDeleted: int, calName: string}
 	 */
 	public function importCalendar(string $userId, string $calId, string $calName, ?string $color = null): array {
 		$params = [];
@@ -538,7 +538,17 @@ class GoogleCalendarAPIService {
 
 		date_default_timezone_set('UTC');
 		$allEvents = $this->config->getUserValue($userId, Application::APP_ID, 'consider_all_events', '1') === '1';
-		$eventsGenerator = $this->getCalendarEvents($userId, $calId, $allEvents);
+
+		// syncToken is incompatible with eventTypes filtering, so only use
+		// incremental sync when the user wants all event types (the default).
+		$useSyncToken = $allEvents;
+		$syncTokenKey = $this->syncTokenConfigKey($calId);
+		$syncToken = $useSyncToken
+			? $this->config->getUserValue($userId, Application::APP_ID, $syncTokenKey, '')
+			: '';
+		$isIncremental = $syncToken !== '';
+
+		$eventsGenerator = $this->getCalendarEvents($userId, $calId, $allEvents, $syncToken);
 
 		// Normal events
 		$events = [];
@@ -552,9 +562,32 @@ class GoogleCalendarAPIService {
 				array_push($events, $e);
 			}
 		}
+		$genReturn = $eventsGenerator->getReturn();
+
+		// 410 GONE means Google invalidated the syncToken (too old, or the
+		// calendar shape changed). Drop the token and fall back to a full pull
+		// on the same tick.
+		if ($isIncremental && $this->isSyncTokenExpiredError($genReturn)) {
+			$this->logger->info('Sync token expired for ' . $calId . ', falling back to full pull', ['app' => Application::APP_ID]);
+			$this->config->deleteUserValue($userId, Application::APP_ID, $syncTokenKey);
+			$syncToken = '';
+			$isIncremental = false;
+			$eventsGenerator = $this->getCalendarEvents($userId, $calId, $allEvents, '');
+			$events = [];
+			$exceptions = [];
+			foreach ($eventsGenerator as $e) {
+				if (isset($e['recurringEventId'])) {
+					array_push($exceptions, $e);
+				} else {
+					array_push($events, $e);
+				}
+			}
+			$genReturn = $eventsGenerator->getReturn();
+		}
 
 		$nbAdded = 0;
 		$nbUpdated = 0;
+		$nbDeleted = 0;
 
 		/** @var Event $e */
 		foreach ($events as $e) {
@@ -564,6 +597,19 @@ class GoogleCalendarAPIService {
 			// deleted. Continue processing it, it could have been updated.
 			if ($unseenURIs->contains($objectUri)) {
 				$unseenURIs->remove($objectUri);
+			}
+
+			// On incremental sync, cancelled master events arrive explicitly
+			// rather than via the "absent from list = deleted" inference used
+			// for full pulls. Delete them now.
+			if ($isIncremental && ($e['status'] ?? null) === 'cancelled') {
+				try {
+					$this->caldavBackend->deleteCalendarObject($ncCalId, $objectUri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
+					$nbDeleted++;
+				} catch (Exception|Throwable $ex) {
+					$this->logger->warning('Error when deleting calendar event ' . $ex->getMessage(), ['app' => Application::APP_ID]);
+				}
+				continue;
 			}
 
 			$existingEvent = null;
@@ -624,19 +670,43 @@ class GoogleCalendarAPIService {
 			}
 		}
 
-		// Anything still unseen was deleted in Google Calendar
-		// Reflect that here
-		foreach ($unseenURIs as $uri) {
-			$this->caldavBackend->deleteCalendarObject($ncCalId, $uri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
+		// On a full pull, anything we never saw in Google's response is now
+		// deleted there too. On incremental, Google explicitly reports
+		// cancellations (handled above), so $unseenURIs is meaningless and
+		// must NOT be drained — every untouched event would be wrongly wiped.
+		if (!$isIncremental) {
+			foreach ($unseenURIs as $uri) {
+				$this->caldavBackend->deleteCalendarObject($ncCalId, $uri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
+			}
 		}
 
-		$eventGeneratorReturn = $eventsGenerator->getReturn();
-		if (isset($eventGeneratorReturn['error'])) {
-			/* return $eventGeneratorReturn; */
+		// Persist the new sync token. On incremental, if any cancelled
+		// recurring-instance arrived, clear the token instead — the existing
+		// EXDATE generation in generateEventData() needs the full exception
+		// list to fire correctly, so we force the next tick to be a full
+		// pull rather than patch the master inline here. On a full pull the
+		// EXDATE path already ran, so save normally.
+		if ($useSyncToken) {
+			$forceFullNext = false;
+			if ($isIncremental) {
+				foreach ($exceptions as $ex) {
+					if (($ex['status'] ?? null) === 'cancelled') {
+						$forceFullNext = true;
+						break;
+					}
+				}
+			}
+			if ($forceFullNext) {
+				$this->config->deleteUserValue($userId, Application::APP_ID, $syncTokenKey);
+			} elseif (is_array($genReturn) && !empty($genReturn['nextSyncToken'])) {
+				$this->config->setUserValue($userId, Application::APP_ID, $syncTokenKey, $genReturn['nextSyncToken']);
+			}
 		}
+
 		return [
 			'nbAdded' => $nbAdded,
 			'nbUpdated' => $nbUpdated,
+			'nbDeleted' => $nbDeleted,
 			'calName' => $newCalName,
 		];
 	}
@@ -721,25 +791,53 @@ class GoogleCalendarAPIService {
 	 * @param string $userId
 	 * @param string $calId
 	 * @param bool $allEvents
-	 * @return Generator<Event>
+	 * @param string $syncToken Empty for a full pull; otherwise the value
+	 *   previously returned by Google as nextSyncToken. Combining a syncToken
+	 *   with eventTypes is unsupported by Google, so callers must only pass a
+	 *   token when $allEvents is true.
+	 * @return Generator<Event> Generator return is `['nextSyncToken' => string|null]`
+	 *   on success or `['error' => string]` on API failure.
 	 */
-	private function getCalendarEvents(string $userId, string $calId, bool $allEvents): Generator {
+	private function getCalendarEvents(string $userId, string $calId, bool $allEvents, string $syncToken = ''): Generator {
 		$params = [
 			'maxResults' => 2500,
 		];
-		if (!$allEvents) {
+		if ($syncToken !== '') {
+			$params['syncToken'] = $syncToken;
+		} elseif (!$allEvents) {
 			$params['eventTypes'] = 'default';
 		}
+		$nextSyncToken = null;
 		do {
 			$result = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events', $params);
 			if (isset($result['error'])) {
 				return $result;
 			}
-			foreach ($result['items'] as $event) {
+			foreach ($result['items'] ?? [] as $event) {
 				yield $event;
+			}
+			if (isset($result['nextSyncToken'])) {
+				$nextSyncToken = $result['nextSyncToken'];
 			}
 			$params['pageToken'] = $result['nextPageToken'] ?? '';
 		} while (isset($result['nextPageToken']));
-		return [];
+		return ['nextSyncToken' => $nextSyncToken];
+	}
+
+	/**
+	 * Detect Google's "sync token expired" error (HTTP 410) on a generator
+	 * return value. The status code is embedded in the error string by
+	 * GoogleAPIService; we match the substring rather than a stricter
+	 * structure to avoid coupling to that format too tightly.
+	 */
+	private function isSyncTokenExpiredError(?array $genReturn): bool {
+		if (!is_array($genReturn) || !isset($genReturn['error'])) {
+			return false;
+		}
+		return strpos($genReturn['error'], 'status code: 410') !== false;
+	}
+
+	private function syncTokenConfigKey(string $calId): string {
+		return 'sync_token_' . md5($calId);
 	}
 }

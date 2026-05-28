@@ -216,6 +216,36 @@ class GoogleCalendarAPIServiceHelpersTest extends TestCase {
 		$this->assertStringContainsString("TZOFFSETTO:+0000", $block);
 	}
 
+	// ---------- isSyncTokenExpiredError ----------
+
+	public function testIsSyncTokenExpiredErrorTrueOn410(): void {
+		$ret = ['error' => 'ServerException|ClientException, message:... status code: 410'];
+		$this->assertTrue($this->invoke('isSyncTokenExpiredError', [$ret]));
+	}
+
+	public function testIsSyncTokenExpiredErrorFalseOn401(): void {
+		$ret = ['error' => 'ServerException|ClientException, message:... status code: 401'];
+		$this->assertFalse($this->invoke('isSyncTokenExpiredError', [$ret]));
+	}
+
+	public function testIsSyncTokenExpiredErrorFalseOnSuccessReturn(): void {
+		$this->assertFalse($this->invoke('isSyncTokenExpiredError', [['nextSyncToken' => 'abc']]));
+	}
+
+	public function testIsSyncTokenExpiredErrorFalseOnNull(): void {
+		$this->assertFalse($this->invoke('isSyncTokenExpiredError', [null]));
+	}
+
+	// ---------- syncTokenConfigKey ----------
+
+	public function testSyncTokenConfigKeyIsDeterministicAndCalIdScoped(): void {
+		$a = $this->invoke('syncTokenConfigKey', ['cal-a@group.calendar.google.com']);
+		$b = $this->invoke('syncTokenConfigKey', ['cal-b@group.calendar.google.com']);
+		$this->assertNotSame($a, $b);
+		$this->assertStringStartsWith('sync_token_', $a);
+		$this->assertSame($a, $this->invoke('syncTokenConfigKey', ['cal-a@group.calendar.google.com']));
+	}
+
 	public function testBuildAttendeeLineFullExample(): void {
 		$this->assertSame(
 			"ATTENDEE;CN=\"Carol\";CUTYPE=RESOURCE;ROLE=OPT-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com\n",
