@@ -162,6 +162,60 @@ class GoogleCalendarAPIServiceHelpersTest extends TestCase {
 		$this->assertStringNotContainsString('PARTSTAT', $line);
 	}
 
+	// ---------- extractTzids ----------
+
+	public function testExtractTzidsReturnsEmptyArrayForUtcOnlyEventData(): void {
+		$ical = "DTSTART;VALUE=DATE-TIME:20260601T150000Z\nDTEND;VALUE=DATE-TIME:20260601T160000Z\n";
+		$this->assertSame([], $this->invoke('extractTzids', [$ical]));
+	}
+
+	public function testExtractTzidsCapturesUniqueTzidsFromDtstartAndDtend(): void {
+		$ical = "DTSTART;TZID=America/New_York:20260601T100000\n"
+			. "DTEND;TZID=America/New_York:20260601T110000\n"
+			. "EXDATE;TZID=Europe/Berlin:20260615T100000\n";
+		$this->assertSame(
+			['America/New_York', 'Europe/Berlin'],
+			$this->invoke('extractTzids', [$ical])
+		);
+	}
+
+	// ---------- formatTzOffset ----------
+
+	public function testFormatTzOffsetPositive(): void {
+		$this->assertSame('+0530', $this->invoke('formatTzOffset', [5 * 3600 + 30 * 60]));
+	}
+
+	public function testFormatTzOffsetNegative(): void {
+		$this->assertSame('-0500', $this->invoke('formatTzOffset', [-5 * 3600]));
+	}
+
+	public function testFormatTzOffsetZero(): void {
+		$this->assertSame('+0000', $this->invoke('formatTzOffset', [0]));
+	}
+
+	// ---------- buildVTimezoneBlock ----------
+
+	public function testBuildVTimezoneBlockReturnsEmptyForUnknownTzid(): void {
+		$this->assertSame('', $this->invoke('buildVTimezoneBlock', ['Not/AReal_Zone']));
+	}
+
+	public function testBuildVTimezoneBlockForDstZoneContainsStandardAndDaylight(): void {
+		$block = $this->invoke('buildVTimezoneBlock', ['America/New_York']);
+		$this->assertStringStartsWith("BEGIN:VTIMEZONE\nTZID:America/New_York\n", $block);
+		$this->assertStringEndsWith("END:VTIMEZONE\n", $block);
+		$this->assertStringContainsString("BEGIN:STANDARD", $block);
+		$this->assertStringContainsString("BEGIN:DAYLIGHT", $block);
+		$this->assertStringContainsString("TZOFFSETTO:-0500", $block);
+		$this->assertStringContainsString("TZOFFSETTO:-0400", $block);
+	}
+
+	public function testBuildVTimezoneBlockForUtcContainsOnlyStandard(): void {
+		$block = $this->invoke('buildVTimezoneBlock', ['UTC']);
+		$this->assertStringContainsString("BEGIN:STANDARD", $block);
+		$this->assertStringNotContainsString("BEGIN:DAYLIGHT", $block);
+		$this->assertStringContainsString("TZOFFSETTO:+0000", $block);
+	}
+
 	public function testBuildAttendeeLineFullExample(): void {
 		$this->assertSame(
 			"ATTENDEE;CN=\"Carol\";CUTYPE=RESOURCE;ROLE=OPT-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:carol@example.com\n",
