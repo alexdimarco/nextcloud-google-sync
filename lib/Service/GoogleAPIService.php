@@ -79,7 +79,10 @@ class GoogleAPIService {
 	}
 
 	/**
-	 * Make the HTTP request
+	 * Make the HTTP request, retrying transient failures (429, 5xx,
+	 * connection errors) with exponential backoff. Permanent errors
+	 * (400/401/403/404/410) return immediately.
+	 *
 	 * @param string $userId the user from which the request is coming
 	 * @param string $endPoint The path to reach in api.google.com
 	 * @param array $params Query parameters (key/val pairs)
@@ -88,6 +91,56 @@ class GoogleAPIService {
 	 * @return array
 	 */
 	public function request(
+		string $userId, string $endPoint, array $params = [],
+		string $method = 'GET', ?string $baseUrl = null,
+	): array {
+		$maxAttempts = 3;
+		for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+			$result = $this->attemptRequest($userId, $endPoint, $params, $method, $baseUrl);
+			if (!isset($result['error'])) {
+				return $result;
+			}
+			$statusCode = $result['statusCode'] ?? null;
+			if ($attempt >= $maxAttempts || !$this->shouldRetry($statusCode)) {
+				return $result;
+			}
+			$delay = $this->computeBackoff($attempt, $result['retryAfter'] ?? null);
+			$this->logger->info(
+				'Retrying Google API ' . $endPoint . ' in ' . $delay . 's (status ' . ($statusCode ?? 'connect') . ', attempt ' . $attempt . '/' . $maxAttempts . ')',
+				['app' => Application::APP_ID]
+			);
+			sleep($delay);
+		}
+		return ['error' => 'Retry loop exhausted'];
+	}
+
+	/**
+	 * Should a request with the given status code be retried? Null means
+	 * a connection-level failure (no response at all).
+	 */
+	private function shouldRetry(?int $statusCode): bool {
+		if ($statusCode === null) {
+			return true;
+		}
+		if ($statusCode === 429) {
+			return true;
+		}
+		return $statusCode >= 500 && $statusCode < 600;
+	}
+
+	/**
+	 * Pick the delay before the next attempt. Honors a Retry-After header
+	 * when Google sent one (capped at 60s to bound a cron tick), otherwise
+	 * exponential 1, 2, 4, … capped at 30s.
+	 */
+	private function computeBackoff(int $attempt, ?int $retryAfter): int {
+		if ($retryAfter !== null && $retryAfter > 0) {
+			return min($retryAfter, 60);
+		}
+		return min(2 ** ($attempt - 1), 30);
+	}
+
+	private function attemptRequest(
 		string $userId, string $endPoint, array $params = [],
 		string $method = 'GET', ?string $baseUrl = null,
 	): array {
@@ -151,23 +204,34 @@ class GoogleAPIService {
 				return json_decode($body, true);
 			}
 		} catch (ServerException|ClientException $e) {
-			/** @var IResponse $response */
 			$response = $e->getResponse();
+			$statusCode = $response->getStatusCode();
 			$body = (string)$response->getBody();
 			$this->logger->warning(
 				'Google API ServerException|ClientException error : ' . $e->getMessage()
-					. ' status code: ' . $response->getStatusCode()
+					. ' status code: ' . $statusCode
 					. ' body: ' . $body,
 				['app' => Application::APP_ID]
 			);
+			$retryAfterHeaders = $response->getHeader('Retry-After');
+			$retryAfter = null;
+			if (is_array($retryAfterHeaders) && isset($retryAfterHeaders[0]) && is_numeric($retryAfterHeaders[0])) {
+				$retryAfter = (int)$retryAfterHeaders[0];
+			}
 			return [
 				'error' => 'ServerException|ClientException, message:'
 					. $e->getMessage()
-					. ' status code: ' . $response->getStatusCode(),
+					. ' status code: ' . $statusCode,
+				'statusCode' => $statusCode,
+				'retryAfter' => $retryAfter,
 			];
 		} catch (ConnectException $e) {
 			$this->logger->warning('Google API error : ' . $e->getMessage(), ['app' => Application::APP_ID]);
-			return ['error' => 'Connection error: ' . $e->getMessage()];
+			return [
+				'error' => 'Connection error: ' . $e->getMessage(),
+				'statusCode' => null,
+				'retryAfter' => null,
+			];
 		}
 	}
 
