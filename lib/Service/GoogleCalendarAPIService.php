@@ -513,9 +513,17 @@ class GoogleCalendarAPIService {
 
 		$newCalName = trim($calName) . ' (' . $this->l10n->t('Google Calendar import') . ')';
 		$params['{DAV:}displayname'] = $newCalName;
-		$newCalUri = urlencode($newCalName);
+		// Use the Google calendar ID (stable across renames) as the CalDAV
+		// URI rather than the display name. Pre-Phase-2 calendars were
+		// created under urlencode(displayName) — fall back to that on lookup
+		// so existing installs keep working without a rename/migration.
+		$newCalUri = urlencode($calId);
 
 		$ncCalId = $this->calendarExists($userId, $newCalUri);
+		if ($ncCalId === null) {
+			$legacyUri = urlencode($newCalName);
+			$ncCalId = $this->calendarExists($userId, $legacyUri);
+		}
 		$calendarIsNew = is_null($ncCalId);
 		if (is_null($ncCalId)) {
 			$ncCalId = $this->caldavBackend->createCalendar('principals/users/' . $userId, $newCalUri, $params);
