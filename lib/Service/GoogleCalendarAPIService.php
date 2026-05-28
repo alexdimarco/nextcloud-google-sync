@@ -674,7 +674,14 @@ class GoogleCalendarAPIService {
 		// deleted there too. On incremental, Google explicitly reports
 		// cancellations (handled above), so $unseenURIs is meaningless and
 		// must NOT be drained — every untouched event would be wrongly wiped.
-		if (!$isIncremental) {
+		//
+		// Also skip the deletion if the generator returned an error: in that
+		// case $events may be partial or empty not because Google's calendar
+		// is empty but because the request failed (token expiry, 5xx,
+		// network blip). Deleting the locally-stored events here would erase
+		// the user's data on a transient API failure.
+		$apiErrored = is_array($genReturn) && isset($genReturn['error']);
+		if (!$isIncremental && !$apiErrored) {
 			foreach ($unseenURIs as $uri) {
 				$this->caldavBackend->deleteCalendarObject($ncCalId, $uri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
 			}
