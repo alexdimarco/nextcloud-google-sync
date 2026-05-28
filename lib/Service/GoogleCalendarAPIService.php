@@ -28,6 +28,7 @@ use Ortic\ColorConverter\Color;
 use Ortic\ColorConverter\Colors\Named;
 use Psr\Log\LoggerInterface;
 use Sabre\DAV\Exception\BadRequest;
+use Sabre\DAV\PropPatch;
 use Sabre\VObject\Component\VCalendar;
 use Sabre\VObject\Component\VEvent;
 use Sabre\VObject\Reader;
@@ -65,18 +66,6 @@ class GoogleCalendarAPIService {
 			return $result;
 		}
 		return $result['items'];
-	}
-
-	/**
-	 * @param string $userId
-	 * @param string $uri
-	 * @return ?int the calendar ID
-	 */
-	private function calendarExists(string $userId, string $uri): ?int {
-		$res = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $uri);
-		return is_null($res)
-			? null
-			: $res['id'];
 	}
 
 	/**
@@ -519,14 +508,22 @@ class GoogleCalendarAPIService {
 		// so existing installs keep working without a rename/migration.
 		$newCalUri = urlencode($calId);
 
-		$ncCalId = $this->calendarExists($userId, $newCalUri);
-		if ($ncCalId === null) {
+		$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $newCalUri);
+		if ($existing === null) {
 			$legacyUri = urlencode($newCalName);
-			$ncCalId = $this->calendarExists($userId, $legacyUri);
+			$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $legacyUri);
 		}
+		$ncCalId = $existing['id'] ?? null;
 		$calendarIsNew = is_null($ncCalId);
 		if (is_null($ncCalId)) {
 			$ncCalId = $this->caldavBackend->createCalendar('principals/users/' . $userId, $newCalUri, $params);
+		} elseif (($existing['{DAV:}displayname'] ?? null) !== $newCalName) {
+			// Propagate a Google-side rename to the existing NC calendar.
+			// Skipped when the value hasn't changed so we don't churn
+			// CalDAV sync state on every tick.
+			$propPatch = new PropPatch(['{DAV:}displayname' => $newCalName]);
+			$this->caldavBackend->updateCalendar($ncCalId, $propPatch);
+			$propPatch->commit();
 		}
 
 		/** @var Set<string> $unseenURIs */
