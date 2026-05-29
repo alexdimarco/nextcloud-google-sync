@@ -22,7 +22,7 @@
  *
  */
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
 use OCP\IUserManager;
 use OCP\IUserSession;

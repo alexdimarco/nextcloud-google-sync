@@ -10,13 +10,13 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
 use DateTime;
 use Exception;
 use Generator;
+use OCA\CalendarBridge\AppInfo\Application;
 use OCA\DAV\CardDAV\CardDavBackend;
-use OCA\Google\AppInfo\Application;
 use OCP\Contacts\IManager as IContactManager;
 use OCP\IConfig;
 use Psr\Log\LoggerInterface;

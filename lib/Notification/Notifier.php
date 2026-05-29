@@ -10,10 +10,10 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Notification;
+namespace OCA\CalendarBridge\Notification;
 
 use InvalidArgumentException;
-use OCA\Google\AppInfo\Application;
+use OCA\CalendarBridge\AppInfo\Application;
 use OCP\IURLGenerator;
 use OCP\L10N\IFactory;
 use OCP\Notification\INotification;
@@ -34,7 +34,7 @@ class Notifier implements INotifier {
 	 * @since 17.0.0
 	 */
 	public function getID(): string {
-		return 'google_synchronization';
+		return 'outside_provider_calendar_bridge';
 	}
 	/**
 	 * Human readable name describing the notifier
@@ -43,7 +43,7 @@ class Notifier implements INotifier {
 	 * @since 17.0.0
 	 */
 	public function getName(): string {
-		return $this->factory->get('google_synchronization')->t('Google');
+		return $this->factory->get('outside_provider_calendar_bridge')->t('Google');
 	}
 
 	/**
@@ -54,12 +54,12 @@ class Notifier implements INotifier {
 	 * @since 9.0.0
 	 */
 	public function prepare(INotification $notification, string $languageCode): INotification {
-		if ($notification->getApp() !== 'google_synchronization') {
+		if ($notification->getApp() !== 'outside_provider_calendar_bridge') {
 			// Not my app => throw
 			throw new InvalidArgumentException();
 		}
 
-		$l = $this->factory->get('google_synchronization', $languageCode);
+		$l = $this->factory->get('outside_provider_calendar_bridge', $languageCode);
 
 		switch ($notification->getSubject()) {
 			case 'import_drive_finished':

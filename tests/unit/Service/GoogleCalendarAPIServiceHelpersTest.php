@@ -1,9 +1,9 @@
 <?php
 
-namespace OCA\Google\Tests\Unit\Service;
+namespace OCA\CalendarBridge\Tests\Unit\Service;
 
 use DateTimeZone;
-use OCA\Google\Service\GoogleCalendarAPIService;
+use OCA\CalendarBridge\Service\GoogleCalendarAPIService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 

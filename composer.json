@@ -15,12 +15,12 @@
     },
     "autoload": {
         "psr-4": {
-            "OCA\\Google\\": "lib/"
+            "OCA\\CalendarBridge\\": "lib/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "OCA\\Google\\Tests\\": "tests/"
+            "OCA\\CalendarBridge\\Tests\\": "tests/"
         }
     },
     "require-dev": {

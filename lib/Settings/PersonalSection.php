@@ -1,6 +1,6 @@
 <?php
 
-namespace OCA\Google\Settings;
+namespace OCA\CalendarBridge\Settings;
 
 use OCP\IL10N;
 use OCP\IURLGenerator;
@@ -20,7 +20,7 @@ class PersonalSection implements IIconSection {
 	 * @returns string
 	 */
 	public function getID(): string {
-		return 'google_synchronization'; //or a generic id if feasible
+		return 'outside_provider_calendar_bridge'; //or a generic id if feasible
 	}
 
 	/**

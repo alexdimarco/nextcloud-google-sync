@@ -10,13 +10,13 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Controller;
+namespace OCA\CalendarBridge\Controller;
 
-use OCA\Google\AppInfo\Application;
-use OCA\Google\Service\GoogleCalendarAPIService;
-use OCA\Google\Service\GoogleContactsAPIService;
-use OCA\Google\Service\GoogleDriveAPIService;
-use OCA\Google\Service\SecretService;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\Service\GoogleCalendarAPIService;
+use OCA\CalendarBridge\Service\GoogleContactsAPIService;
+use OCA\CalendarBridge\Service\GoogleDriveAPIService;
+use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\IConfig;

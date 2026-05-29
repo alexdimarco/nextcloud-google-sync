@@ -1,11 +1,11 @@
 <?php
 
-namespace OCA\Google\Settings;
+namespace OCA\CalendarBridge\Settings;
 
 use OC\User\NoUserException;
-use OCA\Google\AppInfo\Application;
-use OCA\Google\Service\GoogleAPIService;
-use OCA\Google\Service\SecretService;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\Service\GoogleAPIService;
+use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\Files\Folder;
@@ -99,7 +99,7 @@ class Personal implements ISettings {
 	}
 
 	public function getSection(): string {
-		return 'google_synchronization';
+		return 'outside_provider_calendar_bridge';
 	}
 
 	public function getPriority(): int {

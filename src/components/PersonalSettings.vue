@@ -2,54 +2,54 @@
 	<div id="google_prefs" class="section">
 		<h2>
 			<GoogleIcon />
-			{{ t('google_synchronization', 'Google Synchronization') }}
+			{{ t('outside_provider_calendar_bridge', 'Google Synchronization') }}
 		</h2>
 		<p v-if="!showOAuth" class="settings-hint">
-			{{ t('google_synchronization', 'No Google OAuth app configured. Ask your Nextcloud administrator to configure Google connected accounts admin section.') }}
+			{{ t('outside_provider_calendar_bridge', 'No Google OAuth app configured. Ask your Nextcloud administrator to configure Google connected accounts admin section.') }}
 		</p>
 		<div v-else
 			id="google-content">
-			<h3>{{ t('google_synchronization', 'Authentication') }}</h3>
+			<h3>{{ t('outside_provider_calendar_bridge', 'Authentication') }}</h3>
 			<button v-if="!connected" class="google-oauth" @click="onOAuthClick">
 				<GoogleIconColor />
-				<span>{{ t('google_synchronization', 'Sign in with Google') }}</span>
+				<span>{{ t('outside_provider_calendar_bridge', 'Sign in with Google') }}</span>
 			</button>
 			<div v-else>
 				<div class="line">
 					<label class="google-connected">
 						<CheckIcon />
-						{{ t('google_synchronization', 'Connected as {user}', { user: state.user_name }) }}
+						{{ t('outside_provider_calendar_bridge', 'Connected as {user}', { user: state.user_name }) }}
 					</label>
 					<NcButton @click="onLogoutClick">
 						<template #icon>
 							<CloseIcon />
 						</template>
-						{{ t('google_synchronization', 'Disconnect from Google') }}
+						{{ t('outside_provider_calendar_bridge', 'Disconnect from Google') }}
 					</NcButton>
 				</div>
 				<br>
 				<div v-if="nbContacts + nbOtherContacts >= 0"
 					id="google-contacts">
-					<h3>{{ t('google_synchronization', 'Contacts') }}</h3>
+					<h3>{{ t('outside_provider_calendar_bridge', 'Contacts') }}</h3>
 					<div class="line">
 						<NcCheckboxRadioSwitch v-if="!importingContacts && state.user_scopes.can_access_other_contacts"
 							:model-value="state.consider_other_contacts"
 							@update:model-value="onContactsConsiderOtherChange">
-							{{ t('google_synchronization', 'Include other contacts') }}
+							{{ t('outside_provider_calendar_bridge', 'Include other contacts') }}
 						</NcCheckboxRadioSwitch>
 					</div>
 					<div class="line">
 						<label>
 							<AccountGroupOutlineIcon />
 							{{ state.consider_other_contacts
-								? t('google_synchronization', '{amount} Google + {otherAmount} other contacts', { amount: nbContacts, otherAmount: nbOtherContacts })
-								: t('google_synchronization', '{amount} Google contacts', { amount: nbContacts }) }}
+								? t('outside_provider_calendar_bridge', '{amount} Google + {otherAmount} other contacts', { amount: nbContacts, otherAmount: nbOtherContacts })
+								: t('outside_provider_calendar_bridge', '{amount} Google contacts', { amount: nbContacts }) }}
 						</label>
 						<NcButton @click="onImportContacts">
 							<template #icon>
 								<AccountMultipleOutlineIcon />
 							</template>
-							{{ t('google_synchronization', 'Import Google Contacts in Nextcloud') }}
+							{{ t('outside_provider_calendar_bridge', 'Import Google Contacts in Nextcloud') }}
 						</NcButton>
 					</div>
 					<br>
@@ -57,10 +57,10 @@
 						<select v-if="showAddressBooks"
 							v-model.number="selectedAddressBook">
 							<option :value="-1">
-								{{ t('google_synchronization', 'Choose where to import the contacts') }}
+								{{ t('outside_provider_calendar_bridge', 'Choose where to import the contacts') }}
 							</option>
 							<option :value="0">
-								➕ {{ t('google_synchronization', 'New address book') }}
+								➕ {{ t('outside_provider_calendar_bridge', 'New address book') }}
 							</option>
 							<option v-for="(ab, k) in addressbooks" :key="k" :value="k">
 								📕 {{ ab.name }}
@@ -70,24 +70,24 @@
 							v-model="newAddressBookName"
 							type="text"
 							class="contact-input"
-							:placeholder="t('google_synchronization', 'address book name')">
+							:placeholder="t('outside_provider_calendar_bridge', 'address book name')">
 						<NcButton v-if="showAddressBooks && selectedAddressBook > -1 && (selectedAddressBook > 0 || newAddressBookName)"
 							:class="{ loading: importingContacts }"
 							@click="onFinalImportContacts">
 							<template #icon>
 								<TrayArrowDownIcon />
 							</template>
-							{{ t('google_synchronization', 'Import in "{name}" address book', { name: selectedAddressBookName }) }}
+							{{ t('outside_provider_calendar_bridge', 'Import in "{name}" address book', { name: selectedAddressBookName }) }}
 						</NcButton>
 						<br>
 					</div>
 				</div>
 				<div v-if="calendars.length > 0">
-					<h3>{{ t('google_synchronization', 'Calendars') }}</h3>
+					<h3>{{ t('outside_provider_calendar_bridge', 'Calendars') }}</h3>
 					<NcCheckboxRadioSwitch
 						:model-value="state.consider_all_events"
 						@update:model-value="onConsiderAllEventsChange">
-						{{ t('google_synchronization', 'Import all events including Birthdays') }}
+						{{ t('outside_provider_calendar_bridge', 'Import all events including Birthdays') }}
 					</NcCheckboxRadioSwitch>
 					<div v-for="cal in calendars" :key="cal.id" class="calendar-item">
 						<label>
@@ -100,29 +100,29 @@
 							<template #icon>
 								<CalendarImportOutlineIcon />
 							</template>
-							{{ t('google_synchronization', 'Import calendar') }}
+							{{ t('outside_provider_calendar_bridge', 'Import calendar') }}
 						</NcButton>
 						<NcCheckboxRadioSwitch
 							:model-value="cal.isJobRegistered"
 							:loading="loadingSyncCalendar[cal.id]"
 							@update:model-value="onCalendarSyncChange(cal)">
-							{{ t('google_synchronization', 'Sync calendar') }}
+							{{ t('outside_provider_calendar_bridge', 'Sync calendar') }}
 						</NcCheckboxRadioSwitch>
 					</div>
 					<br>
 				</div>
 				<div v-if="showDrive"
 					id="google-drive">
-					<h3>{{ t('google_synchronization', 'Drive') }}</h3>
+					<h3>{{ t('outside_provider_calendar_bridge', 'Drive') }}</h3>
 					<NcCheckboxRadioSwitch v-if="!importingDrive"
 						:model-value="!state.consider_shared_files"
 						@update:model-value="onDriveConsiderSharedChange">
-						{{ t('google_synchronization', 'Ignore shared files') }}
+						{{ t('outside_provider_calendar_bridge', 'Ignore shared files') }}
 					</NcCheckboxRadioSwitch>
 					<div v-if="!importingDrive" class="line">
 						<label for="document-format">
 							<FileDocumentOutlineIcon />
-							{{ t('google_synchronization', 'Google documents import format') }}
+							{{ t('outside_provider_calendar_bridge', 'Google documents import format') }}
 						</label>
 						<select id="document-format"
 							v-model="state.document_format"
@@ -139,7 +139,7 @@
 					<div v-if="!importingDrive" class="line">
 						<label for="drive-output">
 							<FolderOutlineIcon />
-							{{ t('google_synchronization', 'Import directory') }}
+							{{ t('outside_provider_calendar_bridge', 'Import directory') }}
 						</label>
 						<input id="drive-output"
 							:readonly="true"
@@ -171,7 +171,7 @@
 					<div class="line">
 						<label v-if="state.consider_shared_files && sharedWithMeSize > 0">
 							<FileOutlineIcon />
-							{{ t('google_synchronization',
+							{{ t('outside_provider_calendar_bridge',
 								'Your Google Drive ({formSize} + {formSharedSize} shared with you)',
 								{ formSize: myHumanFileSize(driveSize, true), formSharedSize: myHumanFileSize(sharedWithMeSize, true) }
 							)
@@ -179,7 +179,7 @@
 						</label>
 						<label v-else>
 							<FileOutlineIcon />
-							{{ t('google_synchronization', 'Your Google Drive ({formSize})', { formSize: myHumanFileSize(driveSize, true) }) }}
+							{{ t('outside_provider_calendar_bridge', 'Your Google Drive ({formSize})', { formSize: myHumanFileSize(driveSize, true) }) }}
 						</label>
 						<NcButton v-if="enoughSpaceForDrive && !importingDrive"
 							id="google-import-files"
@@ -189,15 +189,15 @@
 							<template #icon>
 								<GoogleDriveIcon />
 							</template>
-							{{ t('google_synchronization', 'Import Google Drive files') }}
+							{{ t('outside_provider_calendar_bridge', 'Import Google Drive files') }}
 						</NcButton>
 						<span v-else-if="!enoughSpaceForDrive">
-							{{ t('google_synchronization', 'Your Google Drive is bigger than your remaining space left ({formSpace})', { formSpace: myHumanFileSize(state.free_space) }) }}
+							{{ t('outside_provider_calendar_bridge', 'Your Google Drive is bigger than your remaining space left ({formSpace})', { formSpace: myHumanFileSize(state.free_space) }) }}
 						</span>
 					</div>
 					<div v-if="importingDrive">
 						<br>
-						{{ n('google_synchronization', '{amount} file imported ({progress}%)', '{amount} files imported ({progress}%)', nbImportedFiles, { amount: nbImportedFiles, progress: driveImportProgress }) }}
+						{{ n('outside_provider_calendar_bridge', '{amount} file imported ({progress}%)', '{amount} files imported ({progress}%)', nbImportedFiles, { amount: nbImportedFiles, progress: driveImportProgress }) }}
 						<br>
 						{{ lastDriveImportDate }}
 						<br>
@@ -205,7 +205,7 @@
 							<template #icon>
 								<CloseIcon />
 							</template>
-							{{ t('google_synchronization', 'Cancel Google Drive import') }}
+							{{ t('outside_provider_calendar_bridge', 'Cancel Google Drive import') }}
 						</NcButton>
 					</div>
 				</div>
@@ -266,8 +266,8 @@ export default {
 
 	data() {
 		return {
-			state: loadState('google_synchronization', 'user-config'),
-			redirect_uri: window.location.protocol + '//' + window.location.host + generateUrl('/apps/google_synchronization/oauth-redirect'),
+			state: loadState('outside_provider_calendar_bridge', 'user-config'),
+			redirect_uri: window.location.protocol + '//' + window.location.host + generateUrl('/apps/outside_provider_calendar_bridge/oauth-redirect'),
 			// calendars
 			calendars: [],
 			importingCalendar: {},
@@ -321,9 +321,9 @@ export default {
 		},
 		lastDriveImportDate() {
 			return this.lastDriveImportTimestamp !== 0
-				? t('google_synchronization', 'Last Google Drive import job at {date}', { date: moment.unix(this.lastDriveImportTimestamp).format('LLL') })
-				: t('google_synchronization', 'Google Drive background import process will begin soon.') + ' '
-					+ t('google_synchronization', 'You can close this page. You will be notified when it finishes.')
+				? t('outside_provider_calendar_bridge', 'Last Google Drive import job at {date}', { date: moment.unix(this.lastDriveImportTimestamp).format('LLL') })
+				: t('outside_provider_calendar_bridge', 'Google Drive background import process will begin soon.') + ' '
+					+ t('outside_provider_calendar_bridge', 'You can close this page. You will be notified when it finishes.')
 		},
 		driveImportProgress() {
 			return this.driveSize > 0 && this.nbImportedFiles > 0
@@ -341,9 +341,9 @@ export default {
 		const urlParams = new URLSearchParams(paramString)
 		const ghToken = urlParams.get('googleToken')
 		if (ghToken === 'success') {
-			showSuccess(t('google_synchronization', 'Successfully connected to Google!'))
+			showSuccess(t('outside_provider_calendar_bridge', 'Successfully connected to Google!'))
 		} else if (ghToken === 'error') {
-			showError(t('google_synchronization', 'Google connection error:') + ' ' + urlParams.get('message'))
+			showError(t('outside_provider_calendar_bridge', 'Google connection error:') + ' ' + urlParams.get('message'))
 		}
 
 		this.loadData()
@@ -374,10 +374,10 @@ export default {
 			const req = {
 				values,
 			}
-			const url = generateUrl('/apps/google_synchronization/config')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/config')
 			axios.put(url, req)
 				.then((response) => {
-					showSuccess(t('google_synchronization', 'Google options saved'))
+					showSuccess(t('outside_provider_calendar_bridge', 'Google options saved'))
 					// callback
 					if (callback) {
 						callback(response)
@@ -386,7 +386,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to save Google options'),
+						t('outside_provider_calendar_bridge', 'Failed to save Google options'),
 					)
 				})
 		},
@@ -416,12 +416,12 @@ export default {
 					redirect_uri: this.redirect_uri,
 				},
 			}
-			const url = generateUrl('/apps/google_synchronization/config')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/config')
 			axios.put(url, req).then((response) => {
 				if (this.state.use_popup) {
 					const ssoWindow = window.open(
 						requestUrl,
-						t('google_synchronization', 'Sign in with Google'),
+						t('outside_provider_calendar_bridge', 'Sign in with Google'),
 						'toolbar=no, menubar=no, width=600, height=700',
 					)
 					ssoWindow.focus()
@@ -436,13 +436,13 @@ export default {
 			}).catch((error) => {
 				showServerError(
 					error,
-					t('google_synchronization', 'Failed to save Google OAuth state'),
+					t('outside_provider_calendar_bridge', 'Failed to save Google OAuth state'),
 				)
 			})
 		},
 		getGoogleDriveInfo() {
 			this.gettingDriveInfo = true
-			const url = generateUrl('/apps/google_synchronization/drive-size')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/drive-size')
 			axios.get(url)
 				.then((response) => {
 					if (response.data && response.data.usageInDrive) {
@@ -453,7 +453,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to get Google Drive information'),
+						t('outside_provider_calendar_bridge', 'Failed to get Google Drive information'),
 					)
 				})
 				.then(() => {
@@ -461,7 +461,7 @@ export default {
 				})
 		},
 		getGoogleCalendarList() {
-			const url = generateUrl('/apps/google_synchronization/calendars')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/calendars')
 			axios.get(url)
 				.then((response) => {
 					if (response.data && response.data.length && response.data.length > 0) {
@@ -471,7 +471,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to get calendar list'),
+						t('outside_provider_calendar_bridge', 'Failed to get calendar list'),
 					)
 				})
 		},
@@ -484,7 +484,7 @@ export default {
 				: '0082c9'
 		},
 		getNbGoogleContacts() {
-			const url = generateUrl('/apps/google_synchronization/contact-number')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/contact-number')
 			axios.get(url)
 				.then((response) => {
 					if (response.data && Object.keys(response.data).length > 0) {
@@ -495,14 +495,14 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to get number of Google contacts'),
+						t('outside_provider_calendar_bridge', 'Failed to get number of Google contacts'),
 					)
 				})
 				.then(() => {
 				})
 		},
 		getLocalAddressBooks() {
-			const url = generateUrl('/apps/google_synchronization/local-addressbooks')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/local-addressbooks')
 			axios.get(url)
 				.then((response) => {
 					if (response.data && Object.keys(response.data).length > 0) {
@@ -512,7 +512,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to get address book list'),
+						t('outside_provider_calendar_bridge', 'Failed to get address book list'),
 					)
 				})
 		},
@@ -529,7 +529,7 @@ export default {
 					newAddressBookName: this.selectedAddressBook > 0 ? null : this.newAddressBookName,
 				},
 			}
-			const url = generateUrl('/apps/google_synchronization/import-contacts')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-contacts')
 			axios.get(url, req)
 				.then((response) => {
 					const nbSeen = response.data.nbSeen
@@ -537,7 +537,7 @@ export default {
 					const nbUpdated = response.data.nbUpdated
 					showSuccess(
 						this.n(
-							'google_synchronization',
+							'outside_provider_calendar_bridge',
 							'{nbSeen} Google contact seen. {nbAdded} added, {nbUpdated} updated in {name}',
 							'{nbSeen} Google contacts seen. {nbAdded} added, {nbUpdated} updated in {name}',
 							nbSeen,
@@ -549,7 +549,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to get address book list'),
+						t('outside_provider_calendar_bridge', 'Failed to get address book list'),
 					)
 				})
 				.then(() => {
@@ -566,7 +566,7 @@ export default {
 					color: cal.backgroundColor || '#0082c9',
 				},
 			}
-			const url = generateUrl('/apps/google_synchronization/import-calendar')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-calendar')
 			axios.get(url, req)
 				.then((response) => {
 					const nbAdded = response.data.nbAdded
@@ -575,7 +575,7 @@ export default {
 					const calName = response.data.calName
 					showSuccess(
 						this.n(
-							'google_synchronization',
+							'outside_provider_calendar_bridge',
 							'{total} event successfully imported in {name} ({nbAdded} created, {nbUpdated} updated)',
 							'{total} events successfully imported in {name} ({nbAdded} created, {nbUpdated} updated)',
 							total,
@@ -586,7 +586,7 @@ export default {
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to import Google calendar'),
+						t('outside_provider_calendar_bridge', 'Failed to import Google calendar'),
 					)
 				})
 				.then(() => {
@@ -608,19 +608,19 @@ export default {
 			const actionMessage = `${desiredState ? '' : 'un'}register`
 			const successMessage = `Successfully ${actionMessage}ed background job`
 			const errorMessage = `Failed to ${actionMessage} background job`
-			const url = generateUrl('/apps/google_synchronization/set-sync-calendar')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/set-sync-calendar')
 			axios.get(url, req)
 				.then((_response) => {
 					cal.isJobRegistered = desiredState
 					showSuccess(
-						this.n('google_synchronization', successMessage, successMessage, 1),
+						this.n('outside_provider_calendar_bridge', successMessage, successMessage, 1),
 					)
 				})
 				.catch((error) => {
 					console.error(errorMessage, error)
 					showServerError(
 						error,
-						t('google_synchronization', errorMessage),
+						t('outside_provider_calendar_bridge', errorMessage),
 					)
 				})
 				.finally(() => {
@@ -628,7 +628,7 @@ export default {
 				})
 		},
 		getDriveImportValues(launchLoop = false) {
-			const url = generateUrl('/apps/google_synchronization/import-files-info')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-files-info')
 			axios.get(url)
 				.then((response) => {
 					if (response.data && Object.keys(response.data).length > 0) {
@@ -655,19 +655,19 @@ export default {
 				params: {
 				},
 			}
-			const url = generateUrl('/apps/google_synchronization/import-files')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-files')
 			axios.get(url, req)
 				.then((response) => {
 					const targetPath = response.data.targetPath
 					showSuccess(
-						t('google_synchronization', 'Starting importing files in {targetPath} directory', { targetPath }),
+						t('outside_provider_calendar_bridge', 'Starting importing files in {targetPath} directory', { targetPath }),
 					)
 					this.getDriveImportValues(true)
 				})
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to start importing Google Drive'),
+						t('outside_provider_calendar_bridge', 'Failed to start importing Google Drive'),
 					)
 				})
 		},
@@ -682,7 +682,7 @@ export default {
 					drive_imported_size: '0',
 				},
 			}
-			const url = generateUrl('/apps/google_synchronization/config')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/config')
 			axios.put(url, req)
 				.then((response) => {
 				})
@@ -712,7 +712,7 @@ export default {
 		},
 		onDriveOutputChange() {
 			OC.dialogs.filepicker(
-				t('google_synchronization', 'Choose where to write imported files'),
+				t('outside_provider_calendar_bridge', 'Choose where to write imported files'),
 				(targetPath) => {
 					if (targetPath === '') {
 						targetPath = '/'

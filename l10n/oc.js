@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Bad credentials" : "Marrits identificants",
     "Connected accounts" : "Comptes connectats",

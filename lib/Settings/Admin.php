@@ -1,9 +1,9 @@
 <?php
 
-namespace OCA\Google\Settings;
+namespace OCA\CalendarBridge\Settings;
 
-use OCA\Google\AppInfo\Application;
-use OCA\Google\Service\SecretService;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\IConfig;

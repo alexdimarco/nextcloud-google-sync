@@ -10,13 +10,13 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
 use DateTime;
 use Exception;
-use OCA\Google\AppInfo\Application;
-use OCA\Google\BackgroundJob\ImportDriveJob;
-use OCA\Google\Service\Utils\FileUtils;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\BackgroundJob\ImportDriveJob;
+use OCA\CalendarBridge\Service\Utils\FileUtils;
 use OCP\BackgroundJob\IJobList;
 use OCP\Config\IUserConfig;
 use OCP\Files\File;

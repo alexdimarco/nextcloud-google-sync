@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error getting OAuth access token." : "שגיאה בקבלת אסימון גישה מסוג OAuth.",
     "Error during OAuth exchanges" : "שגיאה במהלך החלפות OAuth",

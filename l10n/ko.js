@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error during OAuth exchanges" : "OAuth 교환 중 오류가 발생했습니다.",
     "OAuth access token refused" : "OAuth 액세스 토큰 거부됨",

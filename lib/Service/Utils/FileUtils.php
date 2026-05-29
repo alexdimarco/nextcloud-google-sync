@@ -1,6 +1,6 @@
 <?php
 
-namespace OCA\Google\Service\Utils;
+namespace OCA\CalendarBridge\Service\Utils;
 
 use OCP\Files\EmptyFileNameException;
 use OCP\Files\FileNameTooLongException;

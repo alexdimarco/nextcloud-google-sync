@@ -2,81 +2,81 @@
 	<div id="google_prefs" class="section">
 		<h2>
 			<GoogleIcon />
-			{{ t('google_synchronization', 'Google Synchronization') }}
+			{{ t('outside_provider_calendar_bridge', 'Google Synchronization') }}
 		</h2>
 		<ol class="settings-hint">
 			<li>
 				<a href="https://console.developers.google.com/" class="external" target="_blank">
-					{{ t('google_synchronization', 'Open the Google Cloud Console.') }}
+					{{ t('outside_provider_calendar_bridge', 'Open the Google Cloud Console.') }}
 				</a>
 			</li>
-			<li>{{ t('google_synchronization', 'Go to "APIs & Services" => "Credentials" and click on "+ CREATE CREDENTIALS" -> "OAuth client ID".') }}</li>
-			<li>{{ t('google_synchronization', 'Set the "Application type" to "Web application" and give a name to the application.') }}</li>
+			<li>{{ t('outside_provider_calendar_bridge', 'Go to "APIs & Services" => "Credentials" and click on "+ CREATE CREDENTIALS" -> "OAuth client ID".') }}</li>
+			<li>{{ t('outside_provider_calendar_bridge', 'Set the "Application type" to "Web application" and give a name to the application.') }}</li>
 			<li>
-				{{ t('google_synchronization', 'Google may require site verification for OAuth to work with your site, which can be done in Google\'s search console:') }}
-				<a href="https://search.google.com/search-console/" class="external" target="_blank">{{ t('google_synchronization', 'Google Search console') }}</a>
+				{{ t('outside_provider_calendar_bridge', 'Google may require site verification for OAuth to work with your site, which can be done in Google\'s search console:') }}
+				<a href="https://search.google.com/search-console/" class="external" target="_blank">{{ t('outside_provider_calendar_bridge', 'Google Search console') }}</a>
 			</li>
 			<li>
-				{{ t('google_synchronization', 'Make sure you set one "Authorized redirect URI" to') }}
+				{{ t('outside_provider_calendar_bridge', 'Make sure you set one "Authorized redirect URI" to') }}
 				<strong>{{ redirect_uri }}</strong>
 				<p v-if="!isDomainName" class="settings-hint with-icon alert">
 					<AlertOutlineIcon />
-					<strong>{{ t('google_synchronization', 'Warning: You are accessing Nextcloud using an IP address, but Google requires a public domain for redirect URIs.') }}</strong>
+					<strong>{{ t('outside_provider_calendar_bridge', 'Warning: You are accessing Nextcloud using an IP address, but Google requires a public domain for redirect URIs.') }}</strong>
 				</p>
 			</li>
 			<li>
-				{{ t('google_synchronization', 'Put the "Client ID" and "Client secret" below.') }}
+				{{ t('outside_provider_calendar_bridge', 'Put the "Client ID" and "Client secret" below.') }}
 				<div class="fields">
 					<div class="line">
 						<label for="google-client-id">
 							<KeyOutlineIcon />
-							{{ t('google_synchronization', 'Client ID') }}
+							{{ t('outside_provider_calendar_bridge', 'Client ID') }}
 						</label>
 						<input id="google-client-id"
 							v-model="state.client_id"
 							type="password"
 							:readonly="readonly"
-							:placeholder="t('google_synchronization', 'Client ID of your Google application')"
+							:placeholder="t('outside_provider_calendar_bridge', 'Client ID of your Google application')"
 							@focus="readonly = false"
 							@input="onInput">
 					</div>
 					<div class="line">
 						<label for="google-client-secret">
 							<KeyOutlineIcon />
-							{{ t('google_synchronization', 'Client secret') }}
+							{{ t('outside_provider_calendar_bridge', 'Client secret') }}
 						</label>
 						<input id="google-client-secret"
 							v-model="state.client_secret"
 							type="password"
 							:readonly="readonly"
-							:placeholder="t('google_synchronization', 'Client secret of your Google application')"
+							:placeholder="t('outside_provider_calendar_bridge', 'Client secret of your Google application')"
 							@input="onInput"
 							@focus="readonly = false">
 					</div>
 					<NcCheckboxRadioSwitch
 						v-model="state.use_popup"
 						@update:model-value="onUsePopupChanged">
-						{{ t('google_synchronization', 'Use a pop-up to authenticate') }}
+						{{ t('outside_provider_calendar_bridge', 'Use a pop-up to authenticate') }}
 					</NcCheckboxRadioSwitch>
 				</div>
 			</li>
 			<li>
-				{{ t('google_synchronization', 'Finally, go to "APIs & Services" => "Library" and add the following APIs: "Google Drive API", "Google Calendar API", and "People API".') }}
+				{{ t('outside_provider_calendar_bridge', 'Finally, go to "APIs & Services" => "Library" and add the following APIs: "Google Drive API", "Google Calendar API", and "People API".') }}
 			</li>
 			<li>
-				{{ t('google_synchronization', 'Your Nextcloud users will then see a "Connect to Google" button in their personal settings.') }}
+				{{ t('outside_provider_calendar_bridge', 'Your Nextcloud users will then see a "Connect to Google" button in their personal settings.') }}
 			</li>
 		</ol>
 		<br>
 		<hr>
 		<br>
 		<p class="settings-hint">
-			{{ t('google_synchronization', 'Delete all background synchronization jobs. This may be needed after upgrading the app.') }}
+			{{ t('outside_provider_calendar_bridge', 'Delete all background synchronization jobs. This may be needed after upgrading the app.') }}
 		</p>
 		<br>
 		<p class="settings-hint with-icon">
 			<AlertOutlineIcon />
-			{{ t('google_synchronization', 'This will delete Calendar synchronization jobs for all users!') }}
+			{{ t('outside_provider_calendar_bridge', 'This will delete Calendar synchronization jobs for all users!') }}
 		</p>
 		<br>
 		<div class="fields">
@@ -86,7 +86,7 @@
 				<template #icon>
 					<DeleteOutlineIcon />
 				</template>
-				{{ t('google_synchronization', 'Delete all background jobs') }}
+				{{ t('outside_provider_calendar_bridge', 'Delete all background jobs') }}
 			</NcButton>
 		</div>
 	</div>
@@ -124,10 +124,10 @@ export default {
 
 	data() {
 		return {
-			state: loadState('google_synchronization', 'admin-config'),
+			state: loadState('outside_provider_calendar_bridge', 'admin-config'),
 			// to prevent some browsers to fill fields with remembered passwords
 			readonly: true,
-			redirect_uri: window.location.protocol + '//' + window.location.host + generateUrl('/apps/google_synchronization/oauth-redirect'),
+			redirect_uri: window.location.protocol + '//' + window.location.host + generateUrl('/apps/outside_provider_calendar_bridge/oauth-redirect'),
 		}
 	},
 
@@ -151,17 +151,17 @@ export default {
 			}, 2000)()
 		},
 		onDeleteJobs() {
-			axios.delete(generateUrl('/apps/google_synchronization/reset-sync-calendar'))
+			axios.delete(generateUrl('/apps/outside_provider_calendar_bridge/reset-sync-calendar'))
 				.then(() => {
 					showSuccess(
-						this.n('google_synchronization', 'Successfully deleted background jobs', 'Successfully deleted background jobs', 1),
+						this.n('outside_provider_calendar_bridge', 'Successfully deleted background jobs', 'Successfully deleted background jobs', 1),
 					)
 				})
 				.catch((error) => {
 					console.error('Failed to delete background jobs', error)
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to delete background jobs'),
+						t('outside_provider_calendar_bridge', 'Failed to delete background jobs'),
 					)
 				})
 		},
@@ -170,15 +170,15 @@ export default {
 			const req = {
 				values,
 			}
-			const url = generateUrl('/apps/google_synchronization/admin-config')
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/admin-config')
 			axios.put(url, req)
 				.then(() => {
-					showSuccess(t('google_synchronization', 'Google admin options saved'))
+					showSuccess(t('outside_provider_calendar_bridge', 'Google admin options saved'))
 				})
 				.catch((error) => {
 					showServerError(
 						error,
-						t('google_synchronization', 'Failed to save Google admin options'),
+						t('outside_provider_calendar_bridge', 'Failed to save Google admin options'),
 					)
 				})
 		},

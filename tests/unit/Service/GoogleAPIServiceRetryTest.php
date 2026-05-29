@@ -1,8 +1,8 @@
 <?php
 
-namespace OCA\Google\Tests\Unit\Service;
+namespace OCA\CalendarBridge\Tests\Unit\Service;
 
-use OCA\Google\Service\GoogleAPIService;
+use OCA\CalendarBridge\Service\GoogleAPIService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 

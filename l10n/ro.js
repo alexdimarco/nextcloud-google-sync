@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error during OAuth exchanges" : "Eroare în schimbarea OAuth",
     "OAuth access token refused" : "Token-ul OAuth a fost refuzat",

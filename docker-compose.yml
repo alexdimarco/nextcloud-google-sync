@@ -25,7 +25,7 @@ services:
     volumes:
       - app:/var/www/html
       # Mount your app here
-      - ./:/var/www/html/custom_apps/google_synchronization/:ro
+      - ./:/var/www/html/custom_apps/outside_provider_calendar_bridge/:ro
     depends_on:
       - db
 

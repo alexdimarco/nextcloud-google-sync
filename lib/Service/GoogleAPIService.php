@@ -10,14 +10,14 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
 use DateTime;
 use Exception;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\ServerException;
-use OCA\Google\AppInfo\Application;
+use OCA\CalendarBridge\AppInfo\Application;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
 use OCP\IL10N;

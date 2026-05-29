@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "Нема најавено сметка",
     "Missing refresh token in Google response." : "Недостасув токен во Google одговорот",

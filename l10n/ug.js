@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "ئىشلەتكۈچىگە كىرمىدى",
     "Missing refresh token in Google response." : "گۇگۇلنىڭ ئىنكاسىدا يېڭىلاش بەلگىسى يوقاپ كەتتى.",

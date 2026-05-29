@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error during OAuth exchanges" : "Erro durante trocas com o OAuth",
     "Bad credentials" : "Credenciais inválidas",
