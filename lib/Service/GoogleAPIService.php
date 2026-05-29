@@ -19,7 +19,6 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\ServerException;
 use OCA\Google\AppInfo\Application;
 use OCP\Http\Client\IClientService;
-use OCP\Http\Client\IResponse;
 use OCP\IConfig;
 use OCP\IL10N;
 use OCP\Notification\IManager as INotificationManager;
@@ -106,7 +105,7 @@ class GoogleAPIService {
 			}
 			$delay = $this->computeBackoff($attempt, $result['retryAfter'] ?? null);
 			$this->logger->info(
-				'Retrying Google API ' . $endPoint . ' in ' . $delay . 's (status ' . ($statusCode ?? 'connect') . ', attempt ' . $attempt . '/' . $maxAttempts . ')',
+				'Retrying Google API ' . $endPoint . ' in ' . (string)$delay . 's (status ' . (string)($statusCode ?? 'connect') . ', attempt ' . (string)$attempt . '/' . (string)$maxAttempts . ')',
 				['app' => Application::APP_ID]
 			);
 			sleep($delay);
