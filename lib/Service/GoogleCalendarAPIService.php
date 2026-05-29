@@ -39,7 +39,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 /**
  * Service to make requests to Google v3 (JSON) API
  *
- * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>}
+ * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>}
  */
 class GoogleCalendarAPIService {
 	private DateTimeZone $utcTimezone;

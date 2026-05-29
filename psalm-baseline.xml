@@ -1,15 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<files psalm-version="6.7.1@a2f190972555ea01b0cfcc1913924d6c5fc1a64e">
+<files psalm-version="6.16.1@f1f5de594dc76faf8784e02d3dc4716c91c6f6ac">
   <file src="lib/AppInfo/Application.php">
     <MissingOverrideAttribute>
       <code><![CDATA[public function boot(IBootContext $context): void {]]></code>
       <code><![CDATA[public function register(IRegistrationContext $context): void {]]></code>
     </MissingOverrideAttribute>
-  </file>
-  <file src="lib/BackgroundJob/ImportCalendarJob.php">
-    <InvalidOperand>
-      <code><![CDATA[$result['nbAdded']]]></code>
-    </InvalidOperand>
   </file>
   <file src="lib/BackgroundJob/ImportDriveJob.php">
     <MissingOverrideAttribute>
@@ -32,11 +27,6 @@
     <InvalidArgument>
       <code><![CDATA[$expiresAt]]></code>
     </InvalidArgument>
-    <InvalidOperand>
-      <code><![CDATA[$response->getStatusCode()]]></code>
-      <code><![CDATA[$response->getStatusCode()]]></code>
-      <code><![CDATA[strlen($accessToken)]]></code>
-    </InvalidOperand>
     <UndefinedClass>
       <code><![CDATA[$e]]></code>
       <code><![CDATA[$e]]></code>
@@ -71,10 +61,14 @@
   </file>
   <file src="lib/Service/GoogleCalendarAPIService.php">
     <InvalidOperand>
-      <code><![CDATA[$nbMin]]></code>
       <code><![CDATA[microtime(true) - $startTime]]></code>
     </InvalidOperand>
     <MissingDependency>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
@@ -97,6 +91,7 @@
       <code><![CDATA[$ex]]></code>
       <code><![CDATA[$ex]]></code>
       <code><![CDATA[BadRequest]]></code>
+      <code><![CDATA[PropPatch]]></code>
       <code><![CDATA[Reader]]></code>
     </UndefinedClass>
     <UndefinedDocblockClass>
@@ -104,10 +99,6 @@
     </UndefinedDocblockClass>
   </file>
   <file src="lib/Service/GoogleContactsAPIService.php">
-    <InvalidOperand>
-      <code><![CDATA[$nbAdded]]></code>
-      <code><![CDATA[$totalContactNumber]]></code>
-    </InvalidOperand>
     <UndefinedClass>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
@@ -154,18 +145,8 @@
       <code><![CDATA[$e]]></code>
     </ImplicitToStringCast>
     <InvalidArgument>
-      <code><![CDATA[$alreadyImported + $nbDownloaded]]></code>
-      <code><![CDATA[$alreadyImportedSize + $downloadedSize]]></code>
       <code><![CDATA[$ts]]></code>
     </InvalidArgument>
-    <UndefinedDocblockClass>
-      <code><![CDATA[NoUserException]]></code>
-    </UndefinedDocblockClass>
-  </file>
-  <file src="lib/Service/Utils/FileUtils.php">
-    <UndefinedInterfaceMethod>
-      <code><![CDATA[sanitizeFilename]]></code>
-    </UndefinedInterfaceMethod>
   </file>
   <file src="lib/Settings/Admin.php">
     <MissingOverrideAttribute>
