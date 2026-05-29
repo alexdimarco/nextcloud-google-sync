@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "無已登入的使用者",
     "Missing refresh token in Google response." : "Google 回應中缺少重新整理權杖。",

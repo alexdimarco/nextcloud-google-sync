@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error during OAuth exchanges" : "Fejl under OAuth-udvekslinger",
     "OAuth access token refused" : "OAuth adgangsnøgle afvist",

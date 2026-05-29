@@ -1,6 +1,6 @@
 import { loadState } from '@nextcloud/initial-state'
 
-const state = loadState('google_synchronization', 'popup-data')
+const state = loadState('outside_provider_calendar_bridge', 'popup-data')
 const username = state.user_name
 
 if (window.opener) {

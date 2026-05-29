@@ -113,7 +113,7 @@ Use the docker compose file in this repo:
 1. Build JavaScript bundle: `npm run dev` or `npm run watch`
 1. Change the version of nextcloud in `./docker-compose.yml` to the desired version.
 1. `sudo docker compose up -d`
-1. `sudo docker compose exec -u www-data app php occ app:enable google_synchronization`
+1. `sudo docker compose exec -u www-data app php occ app:enable outside_provider_calendar_bridge`
 1. Go to localhost:8080
 
 ### Logging
@@ -161,7 +161,7 @@ This is unorthodox, but easier than using the Nextcloud logging mechanism.
 1. Create a GitHub release and attach the tar.gz
 1. Obtain a signature of the archive:
     ```
-    openssl dgst -sha512 -sign ~/.nextcloud/certificates/google_synchronization.key \
+    openssl dgst -sha512 -sign ~/.nextcloud/certificates/outside_provider_calendar_bridge.key \
         build/artifacts/appstore/*.tar.gz | openssl base64
     ```
 1. Go to https://apps.nextcloud.com/developer/apps/releases/new. Paste the signature and the link to the file from the GitHub release.

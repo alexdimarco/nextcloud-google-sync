@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Google" : "ගූගල්",
     "Connected accounts" : "සම්බන්ධිත ගිණුම්",

@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Missing refresh token in Google response." : "Brak tokena odświeżania w odpowiedzi Google.",
     "Error getting OAuth access token." : "Błąd podczas pobierania tokena dostępu OAuth.",

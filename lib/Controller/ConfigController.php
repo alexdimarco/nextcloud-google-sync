@@ -10,14 +10,14 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Controller;
+namespace OCA\CalendarBridge\Controller;
 
 use DateTime;
 use Exception;
-use OCA\Google\AppInfo\Application;
-use OCA\Google\Service\GoogleAPIService;
-use OCA\Google\Service\GoogleDriveAPIService;
-use OCA\Google\Service\SecretService;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\Service\GoogleAPIService;
+use OCA\CalendarBridge\Service\GoogleDriveAPIService;
+use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
@@ -85,7 +85,7 @@ class ConfigController extends Controller {
 			if (isset($values['drive_output_dir'])) {
 				$root = \OCP\Server::get(\OCP\Files\IRootFolder::class);
 				$userRoot = $root->getUserFolder($this->userId);
-				$result['free_space'] = \OCA\Google\Settings\Personal::getFreeSpace($userRoot, $values['drive_output_dir']);
+				$result['free_space'] = \OCA\CalendarBridge\Settings\Personal::getFreeSpace($userRoot, $values['drive_output_dir']);
 			}
 			if (isset($values['importing_drive']) && $values['importing_drive'] === '0') {
 				$this->googleDriveApiService->cancelImport($this->userId);
@@ -167,7 +167,7 @@ class ConfigController extends Controller {
 	public function oauthRedirect(string $code = '', string $state = '', string $scope = '', string $error = ''): RedirectResponse {
 		if ($this->userId === null) {
 			return new RedirectResponse(
-				$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'google_synchronization'])
+				$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'outside_provider_calendar_bridge'])
 				. '?googleToken=error&message=' . urlencode($this->l->t('No logged in user'))
 			);
 		}
@@ -215,11 +215,11 @@ class ConfigController extends Controller {
 				$usePopup = $this->config->getAppValue(Application::APP_ID, 'use_popup', '0') === '1';
 				if ($usePopup) {
 					return new RedirectResponse(
-						$this->urlGenerator->linkToRoute('google_synchronization.config.popupSuccessPage', ['username' => $username])
+						$this->urlGenerator->linkToRoute('outside_provider_calendar_bridge.config.popupSuccessPage', ['username' => $username])
 					);
 				} else {
 					return new RedirectResponse(
-						$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'google_synchronization'])
+						$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'outside_provider_calendar_bridge'])
 						. '?googleToken=success'
 					);
 				}
@@ -233,7 +233,7 @@ class ConfigController extends Controller {
 			$result = $this->l->t('Error during OAuth exchanges');
 		}
 		return new RedirectResponse(
-			$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'google_synchronization'])
+			$this->urlGenerator->linkToRoute('settings.PersonalSettings.index', ['section' => 'outside_provider_calendar_bridge'])
 			. '?googleToken=error&message=' . urlencode($result)
 		);
 	}

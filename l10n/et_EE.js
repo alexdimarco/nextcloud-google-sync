@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "Sisselogitud kasutajat pole",
     "Error getting OAuth access token." : "Viga OAuthi tunnusloa laadimisel.",

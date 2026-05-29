@@ -6,10 +6,10 @@ declare(strict_types=1);
  * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-namespace OCA\Google\Migration;
+namespace OCA\CalendarBridge\Migration;
 
 use Closure;
-use OCA\Google\AppInfo\Application;
+use OCA\CalendarBridge\AppInfo\Application;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IConfig;
 use OCP\IDBConnection;

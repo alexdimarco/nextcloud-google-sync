@@ -1,8 +1,8 @@
 <?php
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
-use OCA\Google\AppInfo\Application;
+use OCA\CalendarBridge\AppInfo\Application;
 use OCP\IConfig;
 use OCP\IUserManager;
 use OCP\PreConditionNotMetException;

@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "Δεν υπάρχει συνδεδεμένος χρήστης",
     "Missing refresh token in Google response." : "Λείπει διακριτικό ανανέωσης στην απόκριση Google.",

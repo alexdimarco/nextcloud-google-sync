@@ -1,6 +1,6 @@
 <?php
 
-namespace OCA\Google\Settings;
+namespace OCA\CalendarBridge\Settings;
 
 use OCP\IL10N;
 use OCP\IURLGenerator;

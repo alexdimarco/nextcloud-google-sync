@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Connected accounts" : "Tilkopla kontoar",
     "Client ID" : "Klient-ID",

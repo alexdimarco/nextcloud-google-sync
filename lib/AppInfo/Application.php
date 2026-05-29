@@ -8,9 +8,9 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\AppInfo;
+namespace OCA\CalendarBridge\AppInfo;
 
-use OCA\Google\Notification\Notifier;
+use OCA\CalendarBridge\Notification\Notifier;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
@@ -18,7 +18,7 @@ use OCP\AppFramework\Bootstrap\IRegistrationContext;
 
 class Application extends App implements IBootstrap {
 
-	public const APP_ID = 'google_synchronization';
+	public const APP_ID = 'outside_provider_calendar_bridge';
 	// consider that a job is not running anymore after N seconds
 	public const IMPORT_JOB_TIMEOUT = 3600;
 

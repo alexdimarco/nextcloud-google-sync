@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Client ID" : "รหัสไคลเอ็นต์",
     "Client secret" : "ข้อมูลลับไคลเอ็นต์",

@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Nextcloud - google_synchronization
+ * Nextcloud - outside_provider_calendar_bridge
  *
  * This file is licensed under the Affero General Public License version 3 or
  * later. See the COPYING file.
@@ -10,9 +10,9 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\BackgroundJob;
+namespace OCA\CalendarBridge\BackgroundJob;
 
-use OCA\Google\Service\GoogleDriveAPIService;
+use OCA\CalendarBridge\Service\GoogleDriveAPIService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\QueuedJob;
 

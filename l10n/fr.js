@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "Aucun utilisateur connecté",
     "Missing refresh token in Google response." : "Le jeton de rafraîchissement est manquant dans la réponse de Google.",

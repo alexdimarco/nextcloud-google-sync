@@ -1,11 +1,11 @@
 <?php
 
-namespace OCA\Google\BackgroundJob;
+namespace OCA\CalendarBridge\BackgroundJob;
 
 use \OCP\AppFramework\Utility\ITimeFactory;
 use \OCP\BackgroundJob\TimedJob;
 
-use OCA\Google\Service\GoogleCalendarAPIService;
+use OCA\CalendarBridge\Service\GoogleCalendarAPIService;
 
 class ImportCalendarJob extends TimedJob {
 

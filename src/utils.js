@@ -58,7 +58,7 @@ export function showServerError(error, message) {
 	// in GitHub issues.
 	console.error(error)
 
-	const summary = t('google_synchronization', 'Details')
+	const summary = t('outside_provider_calendar_bridge', 'Details')
 	const details = getDetails(error)
 
 	showError(`

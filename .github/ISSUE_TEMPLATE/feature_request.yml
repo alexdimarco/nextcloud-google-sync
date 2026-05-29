@@ -1,5 +1,5 @@
 name: Feature Request
-description: Create a feature request for google_synchronization
+description: Create a feature request for outside_provider_calendar_bridge
 labels: ['enhancement']
 body:
   - type: markdown

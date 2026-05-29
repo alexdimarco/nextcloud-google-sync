@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "No logged in user" : "No logged in user",
     "Missing refresh token in Google response." : "Missing refresh token in Google response.",

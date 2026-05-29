@@ -1,5 +1,5 @@
 OC.L10N.register(
-    "google_synchronization",
+    "outside_provider_calendar_bridge",
     {
     "Error during OAuth exchanges" : "Villa í OAuth-samskiptum",
     "OAuth access token refused" : "OAuth-aðgangsteikni hafnað",

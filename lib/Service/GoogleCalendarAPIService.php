@@ -10,16 +10,16 @@
  * @copyright Julien Veyssier 2020
  */
 
-namespace OCA\Google\Service;
+namespace OCA\CalendarBridge\Service;
 
 use DateTime;
 use DateTimeZone;
 use Ds\Set;
 use Exception;
 use Generator;
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\BackgroundJob\ImportCalendarJob;
 use OCA\DAV\CalDAV\CalDavBackend;
-use OCA\Google\AppInfo\Application;
-use OCA\Google\BackgroundJob\ImportCalendarJob;
 use OCP\BackgroundJob\IJobList;
 use OCP\IConfig;
 use OCP\IL10N;
@@ -468,7 +468,7 @@ class GoogleCalendarAPIService {
 		$this->logger->debug("Starting calendar import of $calId", ['app' => $this->appName]);
 
 		$lockFile = sys_get_temp_dir() .
-			"/nextcloud_google_synchronization_calendar_import_$calId.lock";
+			"/nextcloud_outside_provider_calendar_bridge_calendar_import_$calId.lock";
 
 		if (file_exists($lockFile)) {
 			throw new Exception('Could not acquire lock');
