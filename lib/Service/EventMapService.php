@@ -133,6 +133,67 @@ class EventMapService {
 	}
 
 	/**
+	 * Record an NC-ORIGINATED event after it was created in Google (Phase 2b
+	 * outbound). origin='nc'; google_id is the id we just created; nc_etag is
+	 * the NC object's current etag (the echo baseline — our write touched
+	 * Google, not the NC object, so the next inbound reconcile must see this
+	 * unchanged object as ECHO, not LOCAL_EDIT). Master row only.
+	 *
+	 * Distinct from recordFromImport, which hardcodes origin='google' and
+	 * nc_uri = the Google master id — both wrong for an NC-origin row.
+	 */
+	public function recordLocalNew(int $ncCalId, string $ncUri, string $icalUid, ?string $ncEtag, string $googleId, ?string $googleUpdated): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($icalUid, $ncEtag, $googleId, $googleUpdated): void {
+			$row->setGoogleId($googleId);
+			$row->setIcalUid($icalUid !== '' ? $icalUid : null);
+			$row->setOrigin('nc');
+			if ($ncEtag !== null) {
+				$row->setNcEtag($ncEtag);
+			}
+			$row->setGoogleUpdated($googleUpdated);
+			$row->setState('synced');
+		});
+	}
+
+	/**
+	 * Bind the Google id onto an NC-origin master row when that event echoes
+	 * back inbound (carrying extendedProperties.private.ncOrigin = nc_uri). Does
+	 * NOT touch nc_etag — the NC object did not change, so its echo baseline
+	 * must be preserved. origin is set to 'nc' so a row created here (if the
+	 * outbound record was lost to a crash) is still correctly typed.
+	 */
+	public function bindGoogleIdForNcUri(int $ncCalId, string $ncUri, string $googleId, ?string $googleUpdated): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($googleId, $googleUpdated): void {
+			$row->setGoogleId($googleId);
+			if ($googleUpdated !== null) {
+				$row->setGoogleUpdated($googleUpdated);
+			}
+			$row->setOrigin('nc');
+			$row->setState('synced');
+		});
+	}
+
+	/**
+	 * Whether an NC-ORIGIN map row exists for this Google id. Used by the
+	 * inbound echo de-dup to recognize "the user deleted an event we pushed,
+	 * before its echo arrived" — in which case the echo must NOT resurrect the
+	 * deleted object as a new import. Defensive: false on any lookup failure.
+	 */
+	public function hasNcOriginRowForGoogleId(int $ncCalId, string $googleId): bool {
+		try {
+			return $this->mapper->findByGoogleId($ncCalId, $googleId)->getOrigin() === 'nc';
+		} catch (DoesNotExistException) {
+			return false;
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: provenance lookup failed for google id ' . $googleId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return false;
+		}
+	}
+
+	/**
 	 * Remove every mapping row (master + recurrence siblings) for one NC
 	 * calendar object. Called when the importer deletes that object.
 	 */
