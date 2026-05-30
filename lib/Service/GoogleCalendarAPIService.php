@@ -52,6 +52,7 @@ class GoogleCalendarAPIService {
 		private IJobList $jobList,
 		private GoogleAPIService $googleApiService,
 		private IConfig $config,
+		private EventMapService $eventMapService,
 	) {
 		$this->utcTimezone = new DateTimeZone('-0000');
 	}
@@ -528,10 +529,17 @@ class GoogleCalendarAPIService {
 
 		/** @var Set<string> $unseenURIs */
 		$unseenURIs = new Set();
+		$existingObjects = $this->caldavBackend->getCalendarObjects($ncCalId);
 		/** @var array{uri: string} $e */
-		foreach ($this->caldavBackend->getCalendarObjects($ncCalId) as $e) {
+		foreach ($existingObjects as $e) {
 			$unseenURIs->add($e['uri']);
 		}
+
+		// Phase-0 bidirectional-sync observability: lazily seed the event map
+		// from existing imported objects the first time (steady-state sync
+		// skips unchanged events and would never record them). Purely
+		// additive — no behavior change to the one-way import.
+		$this->eventMapService->seedFromExistingIfEmpty($ncCalId, $existingObjects);
 
 		// get color list
 		$eventColors = [];
@@ -611,6 +619,7 @@ class GoogleCalendarAPIService {
 				try {
 					$this->caldavBackend->deleteCalendarObject($ncCalId, $objectUri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
 					$nbDeleted++;
+					$this->eventMapService->removeForNcUri($ncCalId, $objectUri);
 				} catch (Exception|Throwable $ex) {
 					$this->logger->warning('Error when deleting calendar event ' . $ex->getMessage(), ['app' => Application::APP_ID]);
 				}
@@ -656,6 +665,7 @@ class GoogleCalendarAPIService {
 				try {
 					$this->caldavBackend->updateCalendarObject($ncCalId, $objectUri, $calData);
 					$nbUpdated++;
+					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental);
 				} catch (Exception|Throwable $ex) {
 					$this->logger->warning('Error when updating calendar event ' . $ex->getMessage(), ['app' => Application::APP_ID]);
 				}
@@ -663,6 +673,7 @@ class GoogleCalendarAPIService {
 				try {
 					$this->caldavBackend->createCalendarObject($ncCalId, $objectUri, $calData);
 					$nbAdded++;
+					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental);
 				} catch (BadRequest $ex) {
 					if (strpos($ex->getMessage(), 'uid already exists') !== false) {
 						$this->logger->debug('Skip existing event', ['app' => Application::APP_ID]);
@@ -689,6 +700,7 @@ class GoogleCalendarAPIService {
 		if (!$isIncremental && !$apiErrored) {
 			foreach ($unseenURIs as $uri) {
 				$this->caldavBackend->deleteCalendarObject($ncCalId, $uri, $this->caldavBackend::CALENDAR_TYPE_CALENDAR, true);
+				$this->eventMapService->removeForNcUri($ncCalId, $uri);
 			}
 		}
 
