@@ -70,8 +70,10 @@ class EventMapService {
 	 * @param array $masterEvent The Google master/standalone event ($e in the importer).
 	 * @param array $allExceptions The importer's full $exceptions list.
 	 * @param bool $isFullPull True when this tick is a full pull (not incremental).
+	 * @param ?string $ncEtag The NC object etag returned by the create/update
+	 *   we just performed — the NC-side echo baseline, stored on the master row.
 	 */
-	public function recordFromImport(int $ncCalId, array $masterEvent, array $allExceptions, bool $isFullPull): void {
+	public function recordFromImport(int $ncCalId, array $masterEvent, array $allExceptions, bool $isFullPull, ?string $ncEtag = null): void {
 		$masterId = (string)($masterEvent['id'] ?? '');
 		if ($masterId === '') {
 			return;
@@ -80,11 +82,14 @@ class EventMapService {
 		// master Google id (see importCalendar: $objectUri = $e['id']).
 		$ncUri = $masterId;
 
-		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($masterEvent, $masterId): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($masterEvent, $masterId, $ncEtag): void {
 			$row->setGoogleId($masterId);
 			$row->setIcalUid(isset($masterEvent['iCalUID']) ? (string)$masterEvent['iCalUID'] : null);
 			$row->setOrigin('google');
 			$row->setGoogleUpdated(isset($masterEvent['updated']) ? (string)$masterEvent['updated'] : null);
+			if ($ncEtag !== null) {
+				$row->setNcEtag($ncEtag);
+			}
 			$row->setState('synced');
 		});
 
@@ -173,10 +178,12 @@ class EventMapService {
 				continue;
 			}
 			$lastmod = isset($obj['lastmodified']) ? (int)$obj['lastmodified'] : null;
-			$this->upsert($ncCalId, $uri, '', static function (EventMap $row) use ($uri, $lastmod): void {
+			$etag = isset($obj['etag']) ? (string)$obj['etag'] : null;
+			$this->upsert($ncCalId, $uri, '', static function (EventMap $row) use ($uri, $lastmod, $etag): void {
 				$row->setGoogleId($uri);
 				$row->setOrigin('google');
 				$row->setNcLastmodified($lastmod);
+				$row->setNcEtag($etag);
 				$row->setState('synced');
 			});
 			$seeded++;

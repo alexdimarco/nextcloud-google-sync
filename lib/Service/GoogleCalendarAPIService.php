@@ -53,6 +53,7 @@ class GoogleCalendarAPIService {
 		private GoogleAPIService $googleApiService,
 		private IConfig $config,
 		private EventMapService $eventMapService,
+		private OutboundReconcileService $outboundReconcileService,
 	) {
 		$this->utcTimezone = new DateTimeZone('-0000');
 	}
@@ -672,17 +673,17 @@ class GoogleCalendarAPIService {
 
 			if ($existingEvent !== null) {
 				try {
-					$this->caldavBackend->updateCalendarObject($ncCalId, $objectUri, $calData);
+					$ncEtag = $this->caldavBackend->updateCalendarObject($ncCalId, $objectUri, $calData);
 					$nbUpdated++;
-					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental);
+					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental, $ncEtag);
 				} catch (Exception|Throwable $ex) {
 					$this->logger->warning('Error when updating calendar event ' . $ex->getMessage(), ['app' => Application::APP_ID]);
 				}
 			} else {
 				try {
-					$this->caldavBackend->createCalendarObject($ncCalId, $objectUri, $calData);
+					$ncEtag = $this->caldavBackend->createCalendarObject($ncCalId, $objectUri, $calData);
 					$nbAdded++;
-					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental);
+					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental, $ncEtag);
 				} catch (BadRequest $ex) {
 					if (strpos($ex->getMessage(), 'uid already exists') !== false) {
 						$this->logger->debug('Skip existing event', ['app' => Application::APP_ID]);
@@ -746,6 +747,12 @@ class GoogleCalendarAPIService {
 		if (is_array($genReturn) && isset($genReturn['error'])) {
 			return ['error' => $genReturn['error']];
 		}
+
+		// Phase 2a (bidirectional sync): after a successful inbound import,
+		// dry-run the outbound reconcile for calendars the user has opted into
+		// two-way. Self-gated (default off), logs only, writes nothing to
+		// Google, and is internally defensive — cannot affect the import.
+		$this->outboundReconcileService->dryRunReconcile($userId, $calId, $ncCalId);
 
 		return [
 			'nbAdded' => $nbAdded,
