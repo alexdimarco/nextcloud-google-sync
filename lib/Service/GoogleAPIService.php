@@ -87,15 +87,18 @@ class GoogleAPIService {
 	 * @param array $params Query parameters (key/val pairs)
 	 * @param string $method HTTP query method
 	 * @param ?string $baseUrl
+	 * @param array<string, string> $headers Extra request headers, merged over
+	 *   the defaults (Authorization/User-Agent). Enables e.g. If-Match for
+	 *   optimistic-concurrency writes.
 	 * @return array
 	 */
 	public function request(
 		string $userId, string $endPoint, array $params = [],
-		string $method = 'GET', ?string $baseUrl = null,
+		string $method = 'GET', ?string $baseUrl = null, array $headers = [],
 	): array {
 		$maxAttempts = 3;
 		for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-			$result = $this->attemptRequest($userId, $endPoint, $params, $method, $baseUrl);
+			$result = $this->attemptRequest($userId, $endPoint, $params, $method, $baseUrl, $headers);
 			if (!isset($result['error'])) {
 				return $result;
 			}
@@ -141,7 +144,7 @@ class GoogleAPIService {
 
 	private function attemptRequest(
 		string $userId, string $endPoint, array $params = [],
-		string $method = 'GET', ?string $baseUrl = null,
+		string $method = 'GET', ?string $baseUrl = null, array $headers = [],
 	): array {
 		$this->checkTokenExpiration($userId);
 		$accessToken = $this->secretService->getEncryptedUserValue($userId, 'token');
@@ -150,10 +153,12 @@ class GoogleAPIService {
 			$url = $url . $endPoint;
 			$options = [
 				'timeout' => 0,
-				'headers' => [
+				// Caller-supplied headers are merged over the defaults so a
+				// write can add If-Match without losing auth.
+				'headers' => array_merge([
 					'Authorization' => 'Bearer ' . $accessToken,
-					'User-Agent' => 'Nextcloud Google Synchronization'
-				],
+					'User-Agent' => 'Nextcloud Google Synchronization',
+				], $headers),
 			];
 
 			if (count($params) > 0) {
@@ -200,7 +205,11 @@ class GoogleAPIService {
 						. ' , body:' . substr($body, 0, 30) . '...',
 					['app' => Application::APP_ID]
 				);
-				return json_decode($body, true);
+				// A successful response may carry an empty or non-JSON body —
+				// 204 No Content from events.delete, 304 Not Modified from an
+				// If-None-Match GET. json_decode('') is null, which would
+				// violate this method's array return type, so coalesce to [].
+				return json_decode($body, true) ?? [];
 			}
 		} catch (ServerException|ClientException $e) {
 			$response = $e->getResponse();
