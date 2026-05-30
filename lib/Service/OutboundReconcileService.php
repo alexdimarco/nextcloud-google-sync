@@ -17,10 +17,10 @@ use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
- * Phase 2a: DRY-RUN outbound reconciler. Detects local Nextcloud changes for a
- * calendar the user has opted into two-way sync, classifies each one against
- * the event map, and LOGS what an outbound sync would do — with NO writes to
- * Google and no behavior change.
+ * Outbound reconciler. Detects local Nextcloud changes for a calendar the user
+ * has opted into two-way sync and classifies each against the event map. As of
+ * Phase 2b a LOCAL_NEW change is CREATED in Google (when the write scope is
+ * granted); all other classifications remain log-only until later phases.
  *
  * The hard problem it validates is the NC-side echo: the inbound importer's own
  * createCalendarObject/updateCalendarObject/deleteCalendarObject calls bump the
@@ -48,11 +48,22 @@ class OutboundReconcileService {
 		private EventMapMapper $mapper,
 		private IConfig $config,
 		private LoggerInterface $logger,
+		private OutboundWriteService $writeService,
 	) {
 	}
 
 	public function isTwoWayEnabled(string $userId, string $calId): bool {
 		return $this->config->getUserValue($userId, Application::APP_ID, $this->twoWayKey($calId), '0') === '1';
+	}
+
+	/**
+	 * Whether the user granted the read-write calendar.events scope. Gates all
+	 * outbound writes (the widen-and-gate model: existing read-only users have
+	 * no can_write_calendar key, so writes stay off until they reconnect).
+	 */
+	public function hasWriteScope(string $userId): bool {
+		$scopes = json_decode($this->config->getUserValue($userId, Application::APP_ID, 'user_scopes', '{}'), true);
+		return is_array($scopes) && ($scopes['can_write_calendar'] ?? 0) === 1;
 	}
 
 	private function twoWayKey(string $calId): string {
@@ -110,10 +121,13 @@ class OutboundReconcileService {
 	}
 
 	/**
-	 * Dry-run reconcile for one calendar. Opt-in only; logs would-be outbound
-	 * actions; writes nothing to Google. Fully defensive.
+	 * Reconcile local changes for one calendar (opt-in). Phase 2b: a LOCAL_NEW
+	 * change is CREATED in Google when the user also granted the write scope;
+	 * every other classification (and LOCAL_NEW without the write scope) stays
+	 * log-only. Fully defensive — runs after a committed inbound import, so a
+	 * throw here must never fail the import.
 	 */
-	public function dryRunReconcile(string $userId, string $calId, int $ncCalId): void {
+	public function reconcile(string $userId, string $calId, int $ncCalId): void {
 		// The opt-in gate is INSIDE the try: isTwoWayEnabled() is a DB read
 		// that can throw, and this method runs after a fully-committed inbound
 		// import — a throw here must never fail the import (defensive contract).
@@ -121,6 +135,7 @@ class OutboundReconcileService {
 			if (!$this->isTwoWayEnabled($userId, $calId)) {
 				return;
 			}
+			$canWrite = $this->hasWriteScope($userId);
 			$tokenKey = $this->changeTokenKey($calId);
 			$stored = $this->config->getUserValue($userId, Application::APP_ID, $tokenKey, '');
 
@@ -131,7 +146,7 @@ class OutboundReconcileService {
 				$token = (string)(($changes['syncToken'] ?? '') ?: '');
 				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
 				$this->logger->info(
-					'Calendar Bridge dry-run reconcile: baselined calendar ' . $ncCalId . ' at token ' . $token,
+					'Calendar Bridge reconcile: baselined calendar ' . $ncCalId . ' at token ' . $token,
 					['app' => Application::APP_ID],
 				);
 				return;
@@ -151,21 +166,41 @@ class OutboundReconcileService {
 				$token = (string)(($fresh['syncToken'] ?? '') ?: '');
 				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
 				$this->logger->warning(
-					'Calendar Bridge dry-run reconcile: change token expired/stale for calendar ' . $ncCalId
+					'Calendar Bridge reconcile: change token expired/stale for calendar ' . $ncCalId
 						. ', re-baselined at ' . $token . '; local changes in the gap were not classified',
 					['app' => Application::APP_ID],
 				);
 				return;
 			}
 
+			// Only advance the change token if every write in this delta reached
+			// a terminal state. A transient failure (ERROR/CONFLICT) leaves the
+			// NC object unmodified, so advancing past it would drop it from all
+			// future deltas and silently never sync it. Holding the token re-
+			// processes the whole delta next tick — safe, because an
+			// already-succeeded create re-POSTs under its deterministic id and
+			// hits 409 -> DUPLICATE_ADOPTED (no duplicate).
+			$advance = true;
 			$counts = [];
 			foreach (['added', 'modified'] as $type) {
 				foreach (($changes[$type] ?? []) as $uri) {
-					$cls = $this->classifyOne($ncCalId, $type, (string)$uri);
+					$uri = (string)$uri;
+					$cls = $this->classifyOne($ncCalId, $type, $uri);
 					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
-					if ($cls !== self::ECHO) {
+					if ($cls === self::LOCAL_NEW && $canWrite) {
+						// Phase 2b: the only classification that actually writes.
+						$status = $this->writeService->createLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
+						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
+							$advance = false;
+						}
 						$this->logger->info(
-							'Calendar Bridge dry-run: would handle ' . $cls . ' (' . $type . ') ' . $uri . ' on calendar ' . $ncCalId,
+							'Calendar Bridge: outbound create ' . $uri . ' on calendar ' . $ncCalId . ' -> ' . $status,
+							['app' => Application::APP_ID],
+						);
+					} elseif ($cls !== self::ECHO) {
+						$this->logger->info(
+							'Calendar Bridge: would handle ' . $cls . ' (' . $type . ') ' . $uri . ' on calendar ' . $ncCalId
+								. ($cls === self::LOCAL_NEW ? ' (write scope not granted)' : ''),
 							['app' => Application::APP_ID],
 						);
 					}
@@ -176,16 +211,24 @@ class OutboundReconcileService {
 				$counts[$cls] = ($counts[$cls] ?? 0) + 1;
 				if ($cls !== self::ECHO_DELETE) {
 					$this->logger->info(
-						'Calendar Bridge dry-run: would handle ' . $cls . ' ' . $uri . ' on calendar ' . $ncCalId,
+						'Calendar Bridge: would handle ' . $cls . ' ' . $uri . ' on calendar ' . $ncCalId,
 						['app' => Application::APP_ID],
 					);
 				}
 			}
 
-			$this->config->setUserValue(
-				$userId, Application::APP_ID, $tokenKey,
-				(string)($changes['syncToken'] ?? $stored),
-			);
+			if ($advance) {
+				$this->config->setUserValue(
+					$userId, Application::APP_ID, $tokenKey,
+					(string)($changes['syncToken'] ?? $stored),
+				);
+			} else {
+				$this->logger->info(
+					'Calendar Bridge reconcile calendar ' . $ncCalId
+						. ': holding change token (a write did not reach a terminal state; will retry next tick)',
+					['app' => Application::APP_ID],
+				);
+			}
 
 			if (count($counts) > 0) {
 				$summary = [];
@@ -193,13 +236,13 @@ class OutboundReconcileService {
 					$summary[] = $k . '=' . $v;
 				}
 				$this->logger->info(
-					'Calendar Bridge dry-run reconcile calendar ' . $ncCalId . ': ' . implode(', ', $summary),
+					'Calendar Bridge reconcile calendar ' . $ncCalId . ': ' . implode(', ', $summary),
 					['app' => Application::APP_ID],
 				);
 			}
 		} catch (Throwable $e) {
 			$this->logger->warning(
-				'Calendar Bridge dry-run reconcile failed for calendar ' . $ncCalId . ': ' . $e->getMessage(),
+				'Calendar Bridge reconcile failed for calendar ' . $ncCalId . ': ' . $e->getMessage(),
 				['app' => Application::APP_ID],
 			);
 		}

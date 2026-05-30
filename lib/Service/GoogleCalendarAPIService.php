@@ -39,7 +39,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 /**
  * Service to make requests to Google v3 (JSON) API
  *
- * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>}
+ * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>, extendedProperties?: array{private?: array<string, string>, shared?: array<string, string>}}
  */
 class GoogleCalendarAPIService {
 	private DateTimeZone $utcTimezone;
@@ -616,6 +616,43 @@ class GoogleCalendarAPIService {
 		foreach ($events as $e) {
 			$objectUri = $e['id'];
 
+			// Bidirectional-sync echo indirection: an event WE wrote to Google
+			// (Phase 2b) carries extendedProperties.private.ncOrigin = the NC
+			// object URI. When it echoes back here, bind its google_id onto the
+			// existing NC-origin map row and skip — never mint a duplicate NC
+			// object under URI=$e['id']. Crucially, also drop $ncOrigin from
+			// $unseenURIs: the real object lives under URI=$ncOrigin (not the
+			// google id), so without this the full-pull deletion sweep would
+			// delete the user's own event.
+			$ncOrigin = $e['extendedProperties']['private']['ncOrigin'] ?? null;
+			if ($ncOrigin !== null && $ncOrigin !== '') {
+				$original = $this->caldavBackend->getCalendarObject($ncCalId, $ncOrigin);
+				if ($original !== null) {
+					$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null);
+					if ($unseenURIs->contains($ncOrigin)) {
+						$unseenURIs->remove($ncOrigin);
+					}
+					if ($unseenURIs->contains($objectUri)) {
+						$unseenURIs->remove($objectUri);
+					}
+					continue;
+				}
+				// The original NC object is gone. If we still hold an nc-origin
+				// map row for this Google id, the user DELETED an event we
+				// pushed before its echo arrived — do NOT resurrect it as a
+				// fresh import (which would also collide on the google_id index
+				// and then be re-pushed as a duplicate on the real calendar).
+				// Leave the Google-side delete to a later phase.
+				if ($this->eventMapService->hasNcOriginRowForGoogleId($ncCalId, $objectUri)) {
+					if ($unseenURIs->contains($objectUri)) {
+						$unseenURIs->remove($objectUri);
+					}
+					continue;
+				}
+				// Otherwise: a genuinely foreign Google event that merely
+				// carries a stale ncOrigin tag — fall through to normal import.
+			}
+
 			// If this event exists in NC, remove it from the set of events to be
 			// deleted. Continue processing it, it could have been updated.
 			if ($unseenURIs->contains($objectUri)) {
@@ -752,7 +789,7 @@ class GoogleCalendarAPIService {
 		// dry-run the outbound reconcile for calendars the user has opted into
 		// two-way. Self-gated (default off), logs only, writes nothing to
 		// Google, and is internally defensive — cannot affect the import.
-		$this->outboundReconcileService->dryRunReconcile($userId, $calId, $ncCalId);
+		$this->outboundReconcileService->reconcile($userId, $calId, $ncCalId);
 
 		return [
 			'nbAdded' => $nbAdded,

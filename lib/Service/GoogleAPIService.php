@@ -198,7 +198,16 @@ class GoogleAPIService {
 					'Google API request 400 FAILURE, method ' . $method . ', URL: ' . $url . ' , body: ' . $body,
 					['app' => Application::APP_ID]
 				);
-				return ['error' => 'Bad credentials'];
+				// Surface the status code and body so callers can branch on the
+				// specific error (e.g. 409 duplicate on an idempotent insert).
+				// This path only fires for an HTTP client configured not to
+				// throw on >=400; the ServerException/ClientException catch below
+				// surfaces the same fields for the throwing default.
+				return [
+					'error' => 'Bad credentials, status code: ' . $respCode,
+					'statusCode' => $respCode,
+					'body' => $body,
+				];
 			} else {
 				$this->logger->debug(
 					'Google API request SUCCESS: , method ' . $method . ', URL: ' . $url

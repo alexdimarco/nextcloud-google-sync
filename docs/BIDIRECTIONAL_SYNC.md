@@ -99,6 +99,21 @@ trust-but-verify full reconcile.
     delete. Single inbound-then-outbound job under one lock.
   - Per-calendar toggle default OFF.
 
+  *2b deferred items (from the adversarial review — all fail-safe / log-only in
+  2b, fix in the noted later phase):*
+  - **DURATION instead of DTEND** (a valid but uncommon ICS shape; NC's own UI
+    emits DTEND) is pushed as end==start, collapsing duration. Fix in a write
+    hardening pass with Sabre `DateTimeParser::parseDuration`, coordinated with
+    the all-day +1-day rule.
+  - **Crash-recovery fresh row:** if a crash lands between the Google insert and
+    `recordLocalNew`, and the echo arrives first, `bindGoogleIdForNcUri` mints a
+    fresh `origin='nc'` row with `nc_etag=NULL` → permanent `INDETERMINATE`.
+    Harmless in 2b (INDETERMINATE never writes); must be closed before outbound
+    EDITS (2c) — set the baseline when minting a fresh row.
+  - **Non-IANA TZID** (Windows/Outlook zone names) is passed verbatim and Google
+    may reject it; **floating DATE-TIME** fidelity depends on the process default
+    timezone. Address in the transport/mapping hardening pass.
+
 ### The dual echo gates
 
 Two-way sync has an echo hazard in *both* directions and they need *different*

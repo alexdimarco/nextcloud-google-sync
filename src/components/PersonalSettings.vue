@@ -397,6 +397,9 @@ export default {
 				'profile',
 				'https://www.googleapis.com/auth/calendar.readonly',
 				'https://www.googleapis.com/auth/calendar.events.readonly',
+				// Read-write events scope: enables opt-in two-way (NC -> Google)
+				// sync. Existing read-only users keep working until they reconnect.
+				'https://www.googleapis.com/auth/calendar.events',
 				'https://www.googleapis.com/auth/contacts.readonly',
 				'https://www.googleapis.com/auth/drive.readonly',
 				'https://www.googleapis.com/auth/contacts.other.readonly',

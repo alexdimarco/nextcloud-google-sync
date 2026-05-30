@@ -40,6 +40,8 @@ class ConfigController extends Controller {
 	public const CONTACTS_OTHER_SCOPE = 'https://www.googleapis.com/auth/contacts.other.readonly';
 	public const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
 	public const CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
+	// Read-write events scope required for outbound (NC -> Google) sync.
+	public const CALENDAR_EVENTS_WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
 	public function __construct(
 		string $appName,
@@ -184,6 +186,7 @@ class ConfigController extends Controller {
 			'can_access_contacts' => in_array(self::CONTACTS_SCOPE, $scopes) ? 1 : 0,
 			'can_access_other_contacts' => in_array(self::CONTACTS_OTHER_SCOPE, $scopes) ? 1 : 0,
 			'can_access_calendar' => (in_array(self::CALENDAR_SCOPE, $scopes) && in_array(self::CALENDAR_EVENTS_SCOPE, $scopes)) ? 1 : 0,
+			'can_write_calendar' => in_array(self::CALENDAR_EVENTS_WRITE_SCOPE, $scopes) ? 1 : 0,
 		];
 
 		$this->config->setUserValue($this->userId, Application::APP_ID, 'user_scopes', json_encode($scopesArray));
