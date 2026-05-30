@@ -468,23 +468,32 @@ class GoogleCalendarAPIService {
 		$startTime = microtime(true);
 		$this->logger->debug("Starting calendar import of $calId", ['app' => $this->appName]);
 
-		$lockFile = sys_get_temp_dir() .
-			"/nextcloud_outside_provider_calendar_bridge_calendar_import_$calId.lock";
+		$lockFile = sys_get_temp_dir()
+			. '/nextcloud_outside_provider_calendar_bridge_calendar_import_'
+			. md5($calId) . '.lock';
 
-		if (file_exists($lockFile)) {
+		// Atomic, crash-safe locking: flock(LOCK_EX|LOCK_NB) either grabs the
+		// lock or fails immediately if another sync of this calendar is in
+		// progress. Unlike the previous file_exists()+touch() check (a TOCTOU
+		// race that also left a permanent stale lock if a process died
+		// mid-sync), the kernel releases an flock when the handle closes or
+		// the process exits. This matters now that an outbound writer will
+		// contend for the same calendar.
+		$handle = fopen($lockFile, 'c');
+		if ($handle === false) {
+			throw new Exception('Could not open calendar import lock file');
+		}
+		if (!flock($handle, LOCK_EX | LOCK_NB)) {
+			fclose($handle);
 			throw new Exception('Could not acquire lock');
 		}
-
-		touch($lockFile);
 
 		try {
 			return $this->importCalendar($userId, $calId, $calName, $color);
 		} finally {
 			$this->logger->debug('Elapsed time is: ' . (microtime(true) - $startTime) . ' seconds', ['app' => $this->appName]);
-			try {
-				unlink($lockFile);
-			} catch (Exception) {
-			}
+			flock($handle, LOCK_UN);
+			fclose($handle);
 		}
 	}
 
