@@ -108,6 +108,19 @@
 							@update:model-value="onCalendarSyncChange(cal)">
 							{{ t('outside_provider_calendar_bridge', 'Sync calendar') }}
 						</NcCheckboxRadioSwitch>
+						<NcCheckboxRadioSwitch v-if="state.user_scopes.can_write_calendar"
+							:model-value="cal.isTwoWayEnabled"
+							:loading="loadingTwoWay[cal.id]"
+							:disabled="!cal.isTwoWayEnabled && (!cal.isJobRegistered || !isCalendarWritable(cal))"
+							@update:model-value="onCalendarTwoWayChange(cal)">
+							{{ t('outside_provider_calendar_bridge', 'Two-way sync (Nextcloud → Google)') }}
+							<span v-if="cal.isJobRegistered && !isCalendarWritable(cal)" class="cb-hint">
+								{{ t('outside_provider_calendar_bridge', '(read-only calendar)') }}
+							</span>
+							<span v-else-if="!cal.isJobRegistered" class="cb-hint">
+								{{ t('outside_provider_calendar_bridge', '(enable Sync calendar first)') }}
+							</span>
+						</NcCheckboxRadioSwitch>
 					</div>
 					<br>
 				</div>
@@ -272,6 +285,7 @@ export default {
 			calendars: [],
 			importingCalendar: {},
 			loadingSyncCalendar: {},
+			loadingTwoWay: {},
 			// contacts
 			considerOtherContacts: false,
 			addressbooks: [],
@@ -630,6 +644,28 @@ export default {
 					this.loadingSyncCalendar[calId] = false
 				})
 		},
+		isCalendarWritable(cal) {
+			return cal.accessRole === 'owner' || cal.accessRole === 'writer'
+		},
+		onCalendarTwoWayChange(cal) {
+			const desiredState = !cal.isTwoWayEnabled
+			const calId = cal.id
+			this.loadingTwoWay[calId] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/set-two-way-sync')
+			axios.get(url, { params: { calId, desiredState } })
+				.then((_response) => {
+					cal.isTwoWayEnabled = desiredState
+					showSuccess(t('outside_provider_calendar_bridge',
+						desiredState ? 'Two-way sync enabled' : 'Two-way sync disabled'))
+				})
+				.catch((error) => {
+					console.error('Failed to change two-way sync', error)
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to change two-way sync'))
+				})
+				.finally(() => {
+					this.loadingTwoWay[calId] = false
+				})
+		},
 		getDriveImportValues(launchLoop = false) {
 			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-files-info')
 			axios.get(url)
@@ -776,6 +812,12 @@ export default {
 
 	h3 {
 		font-weight: bold;
+	}
+
+	.cb-hint {
+		margin-inline-start: 6px;
+		color: var(--color-text-maxcontrast);
+		font-size: 90%;
 	}
 
 	.line {
