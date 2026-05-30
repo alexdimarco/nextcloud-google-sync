@@ -4,7 +4,7 @@
     <name>Calendar Bridge</name>
     <summary>Bridge external calendar providers into Nextcloud</summary>
     <description><![CDATA[Calendar Bridge keeps Nextcloud calendars in sync with external providers (currently Google Calendar). Forked from MarcelRobitaille/nextcloud_google_synchronization; not compatible with the upstream Google integration app.]]></description>
-    <version>4.1.1</version>
+    <version>4.1.2</version>
     <licence>agpl</licence>
     <author>Marcel Robitaille</author>
     <author>Alex DiMarco</author>

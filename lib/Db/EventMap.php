@@ -29,6 +29,8 @@ use OCP\AppFramework\Db\Entity;
  * @method void setOrigin(string $origin)
  * @method string|null getBaselineEtag()
  * @method void setBaselineEtag(?string $baselineEtag)
+ * @method string|null getNcEtag()
+ * @method void setNcEtag(?string $ncEtag)
  * @method string|null getGoogleUpdated()
  * @method void setGoogleUpdated(?string $googleUpdated)
  * @method int|null getNcLastmodified()
@@ -46,6 +48,7 @@ class EventMap extends Entity {
 	protected ?string $icalUid = null;
 	protected string $origin = 'google';
 	protected ?string $baselineEtag = null;
+	protected ?string $ncEtag = null;
 	protected ?string $googleUpdated = null;
 	protected ?int $ncLastmodified = null;
 	protected string $state = 'synced';

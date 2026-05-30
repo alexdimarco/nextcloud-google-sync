@@ -1,0 +1,229 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * SPDX-FileCopyrightText: 2026 Alex DiMarco
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+namespace OCA\CalendarBridge\Service;
+
+use OCA\CalendarBridge\AppInfo\Application;
+use OCA\CalendarBridge\Db\EventMapMapper;
+use OCA\DAV\CalDAV\CalDavBackend;
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\IConfig;
+use Psr\Log\LoggerInterface;
+use Throwable;
+
+/**
+ * Phase 2a: DRY-RUN outbound reconciler. Detects local Nextcloud changes for a
+ * calendar the user has opted into two-way sync, classifies each one against
+ * the event map, and LOGS what an outbound sync would do — with NO writes to
+ * Google and no behavior change.
+ *
+ * The hard problem it validates is the NC-side echo: the inbound importer's own
+ * createCalendarObject/updateCalendarObject/deleteCalendarObject calls bump the
+ * NC sync token and appear in getChangesForCalendar exactly like user edits,
+ * and Nextcloud records no provenance. The discriminator is the event map's
+ * nc_etag baseline (the etag at the moment WE last wrote the object):
+ *   - added/modified, no map row            -> LOCAL_NEW   (user created it)
+ *   - added/modified, current etag == map   -> ECHO        (our inbound write)
+ *   - added/modified, current etag != map   -> LOCAL_EDIT  (user edited it)
+ *   - deleted, map row still present         -> LOCAL_DELETE (user deleted it)
+ *   - deleted, map row already gone          -> ECHO_DELETE (our inbound delete,
+ *                                                which already removed the row)
+ */
+class OutboundReconcileService {
+
+	public const ECHO = 'echo';
+	public const LOCAL_NEW = 'local_new';
+	public const LOCAL_EDIT = 'local_edit';
+	public const LOCAL_EDIT_INDETERMINATE = 'local_edit_indeterminate';
+	public const LOCAL_DELETE = 'local_delete';
+	public const ECHO_DELETE = 'echo_delete';
+
+	public function __construct(
+		private CalDavBackend $caldavBackend,
+		private EventMapMapper $mapper,
+		private IConfig $config,
+		private LoggerInterface $logger,
+	) {
+	}
+
+	public function isTwoWayEnabled(string $userId, string $calId): bool {
+		return $this->config->getUserValue($userId, Application::APP_ID, $this->twoWayKey($calId), '0') === '1';
+	}
+
+	private function twoWayKey(string $calId): string {
+		return 'two_way_' . md5($calId);
+	}
+
+	private function changeTokenKey(string $calId): string {
+		return 'nc_change_token_' . md5($calId);
+	}
+
+	/**
+	 * Classify one local change against the map baseline. Pure: no I/O.
+	 *
+	 * @param string $changeType 'added' | 'modified' | 'deleted'
+	 * @param bool $mapRowExists Whether a master map row exists for the object.
+	 * @param ?string $mapNcEtag The map's recorded nc_etag (our last write), or null.
+	 * @param ?string $currentEtag The object's current etag (null for deletes).
+	 */
+	public static function classifyChange(string $changeType, bool $mapRowExists, ?string $mapNcEtag, ?string $currentEtag): string {
+		if ($changeType === 'deleted') {
+			// Our own inbound delete also removed the map row (removeForNcUri),
+			// so a missing row means this delete is our echo.
+			return $mapRowExists ? self::LOCAL_DELETE : self::ECHO_DELETE;
+		}
+		if (!$mapRowExists) {
+			return self::LOCAL_NEW;
+		}
+		if ($mapNcEtag === null) {
+			// We have no baseline to compare against (e.g. a seeded row never
+			// re-written). Cannot decide echo vs edit safely.
+			return self::LOCAL_EDIT_INDETERMINATE;
+		}
+		if ($currentEtag !== null && $currentEtag === $mapNcEtag) {
+			return self::ECHO;
+		}
+		return self::LOCAL_EDIT;
+	}
+
+	/**
+	 * Whether the stored change token is no longer usable and the reconciler
+	 * must re-baseline. True when getChangesForCalendar returned null (the
+	 * token expired — NC purged oc_calendarchanges — or is unknown), or when
+	 * the returned head token is LOWER than the stored one (the calendar was
+	 * deleted and re-imported under a fresh, lower synctoken sequence). Pure.
+	 *
+	 * @param ?array $changes The getChangesForCalendar result, or null.
+	 * @param string $storedToken The previously stored token.
+	 */
+	public static function needsRebaseline(?array $changes, string $storedToken): bool {
+		if ($changes === null) {
+			return true;
+		}
+		$head = isset($changes['syncToken']) ? (int)$changes['syncToken'] : -1;
+		return $head < (int)$storedToken;
+	}
+
+	/**
+	 * Dry-run reconcile for one calendar. Opt-in only; logs would-be outbound
+	 * actions; writes nothing to Google. Fully defensive.
+	 */
+	public function dryRunReconcile(string $userId, string $calId, int $ncCalId): void {
+		// The opt-in gate is INSIDE the try: isTwoWayEnabled() is a DB read
+		// that can throw, and this method runs after a fully-committed inbound
+		// import — a throw here must never fail the import (defensive contract).
+		try {
+			if (!$this->isTwoWayEnabled($userId, $calId)) {
+				return;
+			}
+			$tokenKey = $this->changeTokenKey($calId);
+			$stored = $this->config->getUserValue($userId, Application::APP_ID, $tokenKey, '');
+
+			if ($stored === '') {
+				// First run: baseline at the current token without classifying
+				// the initial full set (all already-imported events).
+				$changes = $this->caldavBackend->getChangesForCalendar($ncCalId, '', 1);
+				$token = (string)(($changes['syncToken'] ?? '') ?: '');
+				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
+				$this->logger->info(
+					'Calendar Bridge dry-run reconcile: baselined calendar ' . $ncCalId . ' at token ' . $token,
+					['app' => Application::APP_ID],
+				);
+				return;
+			}
+
+			$changes = $this->caldavBackend->getChangesForCalendar($ncCalId, $stored, 1);
+
+			// getChangesForCalendar returns null when the stored token is
+			// expired (NC purged oc_calendarchanges) or unknown; it also yields
+			// a head token lower than the stored one if the calendar was deleted
+			// and re-imported under a fresh sequence. In both cases the delta is
+			// meaningless — re-baseline at the current head so detection resumes
+			// rather than re-persisting a dead token forever. The gap's changes
+			// are unrecoverable (NC already dropped the records). Config-only.
+			if (self::needsRebaseline($changes, $stored)) {
+				$fresh = $this->caldavBackend->getChangesForCalendar($ncCalId, '', 1);
+				$token = (string)(($fresh['syncToken'] ?? '') ?: '');
+				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
+				$this->logger->warning(
+					'Calendar Bridge dry-run reconcile: change token expired/stale for calendar ' . $ncCalId
+						. ', re-baselined at ' . $token . '; local changes in the gap were not classified',
+					['app' => Application::APP_ID],
+				);
+				return;
+			}
+
+			$counts = [];
+			foreach (['added', 'modified'] as $type) {
+				foreach (($changes[$type] ?? []) as $uri) {
+					$cls = $this->classifyOne($ncCalId, $type, (string)$uri);
+					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
+					if ($cls !== self::ECHO) {
+						$this->logger->info(
+							'Calendar Bridge dry-run: would handle ' . $cls . ' (' . $type . ') ' . $uri . ' on calendar ' . $ncCalId,
+							['app' => Application::APP_ID],
+						);
+					}
+				}
+			}
+			foreach (($changes['deleted'] ?? []) as $uri) {
+				$cls = $this->classifyOne($ncCalId, 'deleted', (string)$uri);
+				$counts[$cls] = ($counts[$cls] ?? 0) + 1;
+				if ($cls !== self::ECHO_DELETE) {
+					$this->logger->info(
+						'Calendar Bridge dry-run: would handle ' . $cls . ' ' . $uri . ' on calendar ' . $ncCalId,
+						['app' => Application::APP_ID],
+					);
+				}
+			}
+
+			$this->config->setUserValue(
+				$userId, Application::APP_ID, $tokenKey,
+				(string)($changes['syncToken'] ?? $stored),
+			);
+
+			if (count($counts) > 0) {
+				$summary = [];
+				foreach ($counts as $k => $v) {
+					$summary[] = $k . '=' . $v;
+				}
+				$this->logger->info(
+					'Calendar Bridge dry-run reconcile calendar ' . $ncCalId . ': ' . implode(', ', $summary),
+					['app' => Application::APP_ID],
+				);
+			}
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge dry-run reconcile failed for calendar ' . $ncCalId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+		}
+	}
+
+	private function classifyOne(int $ncCalId, string $type, string $uri): string {
+		$mapRowExists = false;
+		$mapNcEtag = null;
+		try {
+			$row = $this->mapper->findByNcObject($ncCalId, $uri, '');
+			$mapRowExists = true;
+			$mapNcEtag = $row->getNcEtag();
+		} catch (DoesNotExistException) {
+			$mapRowExists = false;
+		}
+
+		$currentEtag = null;
+		if ($type !== 'deleted') {
+			$obj = $this->caldavBackend->getCalendarObject($ncCalId, $uri);
+			if (is_array($obj) && isset($obj['etag'])) {
+				$currentEtag = (string)$obj['etag'];
+			}
+		}
+
+		return self::classifyChange($type, $mapRowExists, $mapNcEtag, $currentEtag);
+	}
+}

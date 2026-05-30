@@ -88,11 +88,72 @@ trust-but-verify full reconcile.
 - **Phase 1 — enablers.** Add a `$headers` parameter to
   `GoogleAPIService::request()` (currently it hardcodes headers and *cannot*
   emit `If-Match`); harden the per-calId lockfile to `flock()`.
-- **Phase 2 — non-recurring outbound, opt-in.** Single `ReconcileCalendarJob`
-  running inbound-then-outbound under one lock; `events.insert`/`patch`/
-  `delete` with `If-Match`; `ncOrigin` echo gate; `nc_uri → google_id`
-  indirection on inbound; LWW (ties → NC); 412 → re-pull, never clobber;
-  failures re-queue, never delete. Per-calendar toggle default OFF.
+- **Phase 2 — non-recurring outbound, opt-in.** Built in sub-slices:
+  - *2a (shipped first, read-only):* the `nc_etag` baseline + a dry-run
+    reconciler that detects local NC changes and **logs** what it would push,
+    writing nothing. Validates the dual echo gates against real data.
+  - *2b:* outbound CREATE (`events.insert` with `ncOrigin` + deterministic id)
+    + the inbound `nc_uri → google_id` indirection.
+  - *2c:* outbound UPDATE/DELETE (`events.patch`/`delete` with `If-Match`),
+    LWW (ties → NC), 412 → re-pull never clobber, failures re-queue never
+    delete. Single inbound-then-outbound job under one lock.
+  - Per-calendar toggle default OFF.
+
+### The dual echo gates
+
+Two-way sync has an echo hazard in *both* directions and they need *different*
+gates (verified against the NC source):
+
+- **Google → NC** (our outbound write reappears in the next inbound
+  `events.list`): the `extendedProperties.private.ncOrigin = <nc_uri>` tag on
+  every event we write. Survives Google rewriting the body on insert.
+- **NC → Google** (our inbound write appears in `getChangesForCalendar` as a
+  local change): Nextcloud's own `createCalendarObject`/`updateCalendarObject`/
+  `deleteCalendarObject` bump `oc_calendars.synctoken` and write an
+  `oc_calendarchanges` row, with **no provenance field**. So an inbound import
+  of 700 events looks identical to 700 user edits. The discriminator is the
+  event map's **`nc_etag`** baseline — the etag at the moment *we* last wrote
+  the object:
+
+  | change | map row | etag vs baseline | classification |
+  |--------|---------|------------------|----------------|
+  | added/modified | none | — | LOCAL_NEW (user created) |
+  | added/modified | present | equal | ECHO (our inbound write) |
+  | added/modified | present | differs | LOCAL_EDIT (user edited) |
+  | added/modified | present | baseline null | INDETERMINATE (no baseline yet) |
+  | deleted | present | — | LOCAL_DELETE (user deleted) |
+  | deleted | absent | — | ECHO_DELETE (our inbound delete removed the row) |
+
+  The reconciler baselines at the current sync token on first run (so it never
+  replays the initial import), then processes only deltas. If the stored token
+  expires (NC purges `oc_calendarchanges`) or the calendar is re-imported under
+  a fresh lower sequence, it re-baselines at the current head rather than
+  re-polling a dead token.
+
+#### Phase-2b obligations (from the 2a adversarial review — must hold before any push)
+
+The dry-run classifier is deliberately *fail-safe*: every imperfection degrades
+toward the conservative `LOCAL_EDIT_INDETERMINATE` / `ECHO_DELETE` rather than
+toward "echo misclassified as a confirmed user edit". Before 2b wires a
+classification to an actual `events.insert`/`patch`/`delete`, these must be
+closed or it could push wrongly:
+
+- **Never push an unbaselined row.** Map rows seeded in Phase 0 (and any not
+  re-written since) have `nc_etag = NULL`, so a local edit classifies as
+  `LOCAL_EDIT_INDETERMINATE`. 2b must backfill the `nc_etag` baseline (a
+  trust-but-verify pass that reads current etags, or re-fetch from Google)
+  before treating such a row as a confirmed edit — never push an
+  `INDETERMINATE`.
+- **Harden the delete echo discriminator.** The delete branch trusts map-row
+  *presence* alone. `removeForNcUri` swallows a failed row deletion, so a row
+  could outlive its object and mislabel our own echo-delete as `LOCAL_DELETE`.
+  2b should mark `state` on a failed removal and treat such rows as
+  `ECHO_DELETE`.
+- **`modified` + unreadable current etag → INDETERMINATE, not `LOCAL_EDIT`**,
+  before `LOCAL_EDIT` is wired to a push.
+- **`nc_etag` lives on the master row only** (object-level), which is correct
+  because change detection is object/URI-level; sibling rows intentionally
+  leave it null.
 - **Phase 3 — eligibility UX.** Per-calendar two-way toggle in personal
   settings, gated on `accessRole ∈ {owner, writer}` and the non-readonly
   scope; surfaces per-row `last_error`.
