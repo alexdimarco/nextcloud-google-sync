@@ -37,5 +37,13 @@
                 <referencedClass name="Psr\Http\Client\ClientExceptionInterface" />
             </errorLevel>
         </UndefinedClass>
+        <UndefinedDocblockClass>
+            <errorLevel type="suppress">
+                <!-- ISchemaWrapper::createTable() is documented to return a
+                     Doctrine\DBAL\Schema\Table, whose class only exists at NC
+                     runtime, not in the nextcloud/ocp stubs. -->
+                <referencedClass name="Doctrine\DBAL\Schema\Table" />
+            </errorLevel>
+        </UndefinedDocblockClass>
     </issueHandlers>
 </psalm>
