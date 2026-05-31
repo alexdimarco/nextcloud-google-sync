@@ -453,11 +453,18 @@ class GoogleCalendarAPIService {
 	 * the event's identity for CalDAV clients. Records the new baseline so the
 	 * outbound reconcile classifies the write as an ECHO. Never throws.
 	 *
+	 * Returns one of:
+	 *   'applied'    - written to NC successfully.
+	 *   'unmappable' - the Google event cannot be represented in NC (no mappable
+	 *                  start/end). PERMANENT — the caller parks it instead of
+	 *                  retrying, since a re-pull yields the same unmappable data.
+	 *   'error'      - a (possibly transient) write failure; the caller may retry.
+	 *
 	 * @param Event $e
 	 * @param array<int, Event> $exceptions
 	 * @param array<string, array{background?: string}> $eventColors
 	 */
-	private function applyRemoteToNcOrigin(array $e, array $exceptions, int $ncCalId, string $ncOrigin, array $eventColors, string $originalCalData): bool {
+	private function applyRemoteToNcOrigin(array $e, array $exceptions, int $ncCalId, string $ncOrigin, array $eventColors, string $originalCalData): string {
 		try {
 			$eventData = $this->generateEventData($e, $exceptions, $ncCalId, $eventColors);
 			if ($eventData === '') {
@@ -465,18 +472,27 @@ class GoogleCalendarAPIService {
 					'Calendar Bridge: cannot pull Google change into NC-owned event ' . $ncOrigin . ' (no mappable event data)',
 					['app' => Application::APP_ID],
 				);
-				return false;
+				return 'unmappable';
 			}
 			// Preserve the NC object's original UID (generateEventData stamps the
 			// Google-derived UID, which would change the event's identity for
 			// CalDAV clients). Read it via Sabre so a long, RFC5545 line-FOLDED UID
 			// is unfolded correctly, and rewrite EVERY VEVENT's UID (master + any
 			// recurrence overrides) so the override and master stay consistent.
-			$origVcal = Reader::read($originalCalData);
-			$origVevent = $origVcal->{'VEVENT'} ?? null;
-			if ($origVevent instanceof VEvent && isset($origVevent->UID)) {
-				$origUid = (string)$origVevent->UID;
-				$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData);
+			// A parse failure of the stored original is NON-fatal: degrade to the
+			// generated UID rather than failing (and then looping) the whole apply.
+			try {
+				$origVcal = Reader::read($originalCalData);
+				$origVevent = $origVcal->{'VEVENT'} ?? null;
+				if ($origVevent instanceof VEvent && isset($origVevent->UID)) {
+					$origUid = (string)$origVevent->UID;
+					$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData);
+				}
+			} catch (Throwable $ex) {
+				$this->logger->warning(
+					'Calendar Bridge: could not parse stored original for ' . $ncOrigin . ' to preserve its UID; applying with the generated UID',
+					['app' => Application::APP_ID],
+				);
 			}
 			$vtimezones = '';
 			foreach ($this->extractTzids($eventData) as $tzid) {
@@ -496,13 +512,13 @@ class GoogleCalendarAPIService {
 				isset($e['updated']) ? (string)$e['updated'] : null,
 				isset($e['etag']) ? (string)$e['etag'] : null,
 			);
-			return true;
+			return 'applied';
 		} catch (Exception|Throwable $ex) {
 			$this->logger->warning(
 				'Calendar Bridge: failed to pull Google change into NC-owned event ' . $ncOrigin . ': ' . $ex->getMessage(),
 				['app' => Application::APP_ID],
 			);
-			return false;
+			return 'error';
 		}
 	}
 
@@ -730,7 +746,8 @@ class GoogleCalendarAPIService {
 							$winner = 'google_wins';
 						}
 						if ($winner === 'google_wins') {
-							if ($this->applyRemoteToNcOrigin($e, $exceptions, $ncCalId, $ncOrigin, $eventColors, (string)$original['calendardata'])) {
+							$applied = $this->applyRemoteToNcOrigin($e, $exceptions, $ncCalId, $ncOrigin, $eventColors, (string)$original['calendardata']);
+							if ($applied === 'applied') {
 								$nbUpdated++;
 								// Also (re-)bind google_id/origin: applyRemoteToNcOrigin
 								// preserves an existing row but would not set them if
@@ -740,14 +757,25 @@ class GoogleCalendarAPIService {
 									'Calendar Bridge: pulled Google-side change into NC-owned event ' . $ncOrigin . ' (LWW: google wins)',
 									['app' => Application::APP_ID],
 								);
+							} elseif ($applied === 'unmappable') {
+								// PERMANENT: the Google version can't be represented in
+								// NC. PARK it — bind the incoming etag as the baseline so
+								// it reads as a pure echo next tick and we stop retrying
+								// (a re-pull yields the same data). Self-heals if Google
+								// later makes the event mappable (etag moves again).
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
 							} else {
-								// Apply failed (transient). Keep google_id bound, leave
-								// the baseline STALE (a clobber is impossible — the
-								// outbound patch would 412 -> google-wins -> abandon),
-								// and force a FULL pull next tick so Google re-delivers
-								// this otherwise-unchanged event and we retry.
+								// Possibly-transient failure. Keep google_id bound, leave
+								// the baseline STALE (a clobber is impossible — an outbound
+								// patch would 412 -> google-wins -> abandon). Retry via a
+								// FULL pull, but ONLY from an incremental tick: if the
+								// forced full pull fails again it will NOT re-force (that
+								// tick is non-incremental), so a permanent failure parks
+								// after one retry instead of looping.
 								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, null, null);
-								$forceFullPullNext = true;
+								if ($isIncremental) {
+									$forceFullPullNext = true;
+								}
 							}
 						} else {
 							$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
