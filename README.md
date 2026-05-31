@@ -1,9 +1,16 @@
-# Google Synchronization
+# Calendar Bridge
+
+*(formerly "Google Synchronization"; app id `outside_provider_calendar_bridge`)*
 
 **This is a fork of the [Google Integration][integration_google] app. Do not use both at the same time!!**
 This integration supports both personal Google accounts and Google Workspace (formerly G Suite) accounts.
 
 **Use at your own risk. This app is still in early development. Users are effectively beta testers.**
+
+## 📖 Documentation
+
+- **[User Manual](docs/USER_MANUAL.md)** — everyday use: connect Google, sync a calendar, turn on two-way sync, conflicts & limitations.
+- **[Install & Admin Guide](docs/INSTALL.md)** — administrators: requirements, Google Cloud OAuth setup, install, cron, troubleshooting.
 
 If all you need to do is import all of your data from Google once and permanently migrate to Nextcloud (lucky you),
 you should use the [Google Integration][integration_google] app (of which this app is a fork).
@@ -20,48 +27,51 @@ However, currently, **only Google Calendar background synchronization is support
 Please let me know if you would like to continuously synchronize other services.
 This also means that this app should not be used at the same time as [Google Integration][integration_google].
 
-This is a one-way synchronization.
-Events from Google Calendar are imported into Nextcloud,
-but events from Nextcloud are not sent to Google.
+Synchronization is **Google → Nextcloud by default**, and **optionally two-way**
+(Nextcloud → Google) per calendar. Two-way sync is **opt-in and off by default**:
+nothing is written to Google until you enable it for a specific calendar you can
+write to. See the **[User Manual](docs/USER_MANUAL.md)** for details.
 
 This App supports:
-1. **New events**: Adding a new event in Google Calendar will create a new event in Nextcloud Calendar
-1. **Modified events**: Modifying an event in Google Calendar will modify the event in Nextcloud Calendar
-1. **Deleted events**: Well, you get it by now
-1. **Calendars you own**
-1. **Calendars that have been shared with you**
+1. **New events**: adding an event on either side creates it on the other.
+1. **Modified events**: edits propagate in whichever direction is enabled.
+1. **Deleted events**: deletions propagate (and, two-way, in both directions).
+1. **Recurring events**: series, plus individually moved/renamed/cancelled occurrences (two-way).
+1. **Conflicts**: last-writer-wins, ties go to Nextcloud.
+1. **Calendars you own** and **calendars shared with you** (two-way requires write access).
 
 ## ⚠️ Disclaimers
 
-- **If you own the Google Calendar**, you are probably better off **NOT** using this app and instead copying the private ical address and importing it into Nextcloud Calendar as a read-only subscription. This fork was created because I was part of a team and I did not own the Google Calendar in order to get this private address.
-- This app only synchronizes events **from Google to Nextcloud**, it does **NOT** synchronize events from your Nextcloud Calendar into your Google Calendar.
+- **If you own the Google Calendar** and only need a read-only copy, you may be better off subscribing to its private iCal address in Nextcloud Calendar instead. This fork exists for the case where a calendar is **shared with you** (no private iCal link) and/or you want **two-way** sync.
+- **Two-way (Nextcloud → Google) sync is opt-in and off by default.** It must be enabled per calendar, requires write access to that Google calendar, and requires the read-write OAuth scope (see the [Install & Admin Guide](docs/INSTALL.md)).
 
 [integration_google]: https://github.com/nextcloud/integration_google
 
-## 🚀 Installation
+## 🚀 Installation & setup
 
-In your Nextcloud, simply enable the Google Synchronization app through the Apps management.
-The Google Synchronization app is available for Nextcloud >= 28.
+Enable **Calendar Bridge** through Nextcloud's Apps management (supported on
+Nextcloud 32–33). It requires a one-time Google Cloud OAuth setup by an
+administrator.
 
-## 🔧 Setup
+➡️ **Full step-by-step: [Install & Admin Guide](docs/INSTALL.md)** (requirements,
+Google Cloud OAuth client, redirect URI, cron). The OAuth click-through is in
+[SETUP_GOOGLE_CLOUD.md](docs/SETUP_GOOGLE_CLOUD.md).
 
-The app needs some setup in the Google API Console in order to work.
-To do this, go to Nextcloud Settings > Administration > Connected accounts and follow the instructions in the "Google Synchronization" section.
-
-After setting up the Google API, head to Nextcloud Settings > Data Migration.
-
-The first time coming here, you should only see one button "Sign in with Google".
-Click this, and follow the prompts.
-Give access to everything requested (the app does not handle missing permissions gracefully).
+In short: an admin enables the app, creates a Google OAuth client (Calendar API
+enabled) and pastes the Client ID/Secret under **Administration → Connected
+accounts**; each user then connects from **Personal → Calendar Bridge**.
 
 ## 🔥 Usage
 
-Once signed in, you can import data and change settings by going to Nextcloud Settings > Google Synchronization.
+Once signed in (Personal settings), each Google calendar shows:
+- **Import calendar** — a one-time import of all its events into Nextcloud.
+- **Sync calendar** — schedules a background job to keep importing changes
+  continuously (runs on each cron tick — Administration → Basic settings →
+  Background jobs).
+- **Two-way sync (Nextcloud → Google)** — opt-in, off by default; pushes your
+  Nextcloud edits back to Google for calendars you can write to.
 
-This page is equivalent to [Google Integration][integration_google]
-with the exception of the buttons "Sync calendar" next to each calendar.
-- "Import calendar" is the same as [Google Integration][integration_google]. It will manually import all events from the calendar once.
-- "Sync calendar" will schedule a background job to continuously synchronize all events from that calendar with your Nextcloud calendar. This job should run every time background jobs run (Nextcloud Settings > Administration > Basic settings > Background jobs).
+➡️ **Everyday guide: [User Manual](docs/USER_MANUAL.md).**
 
 ![Screenshot of the app settings page](./docs/images/settings.png)
 

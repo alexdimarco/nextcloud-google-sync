@@ -326,6 +326,17 @@ class EventMapService {
 	}
 
 	/**
+	 * Annotate a master row's last_error with a verify-pass finding (or null to
+	 * clear it). Pure bookkeeping — surfaces drift to an admin querying the table
+	 * without changing any sync behavior. Defensive: never throws.
+	 */
+	public function recordLastError(int $ncCalId, string $ncUri, ?string $error): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($error): void {
+			$row->setLastError($error);
+		});
+	}
+
+	/**
 	 * Remove every mapping row (master + recurrence siblings) for one NC
 	 * calendar object. Called when the importer deletes that object.
 	 */

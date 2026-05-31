@@ -152,6 +152,12 @@
       <code><![CDATA[$ts]]></code>
     </InvalidArgument>
   </file>
+  <file src="lib/Service/MapVerifyService.php">
+    <MissingDependency>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[private]]></code>
+    </MissingDependency>
+  </file>
   <file src="lib/Service/OutboundReconcileService.php">
     <MissingDependency>
       <code><![CDATA[$this->caldavBackend]]></code>

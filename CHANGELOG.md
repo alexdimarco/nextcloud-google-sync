@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.3.0]
+
+### Added
+
+- **Operational hardening — periodic "trust-but-verify" map reconcile** (`MapVerifyService`). At most once every ~6 hours per two-way calendar, the app re-derives the Nextcloud↔Google event map from *both* live sides and repairs only provably loss-proof drift (drops a row whose Nextcloud object and Google event are both gone; rebinds a dangling `google_id` to the Google event still carrying our `ncOrigin` tag). Everything else is logged to `nextcloud.log` and the row's `last_error`. It is read + bookkeeping-only — it never creates, edits, or deletes a Google event or a Nextcloud object.
+- **End-user [User Manual](docs/USER_MANUAL.md)** and **administrator [Install & Admin Guide](docs/INSTALL.md)**.
+
+### Changed
+
+- Calendar import job now logs failures to `nextcloud.log` (visible under system cron), not only to `occ` console output.
+- README updated to reflect two-way sync and link the new guides; `composer.json` now declares `AGPL-3.0-or-later`.
+
+## [4.2.0]
+
+### Added
+
+- **Two-way (bidirectional) sync.** In addition to the existing Google → Nextcloud import, the app can push Nextcloud changes back to Google. It is **opt-in per calendar and off by default**, requires write access to the calendar and the read-write OAuth scope, and covers new events, edits, deletions, and recurring series (including individually moved/renamed/cancelled occurrences). Conflicts resolve last-writer-wins, ties to Nextcloud.
+- Renamed the app to **Calendar Bridge** (`outside_provider_calendar_bridge`).
+
 ## [4.1.0] - 2025-10-25
 
 ### Added
