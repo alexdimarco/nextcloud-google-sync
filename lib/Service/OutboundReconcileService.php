@@ -243,11 +243,24 @@ class OutboundReconcileService {
 				}
 			}
 			foreach (($changes['deleted'] ?? []) as $uri) {
-				$cls = $this->classifyOne($ncCalId, 'deleted', (string)$uri);
+				$uri = (string)$uri;
+				$cls = $this->classifyOne($ncCalId, 'deleted', $uri);
 				$counts[$cls] = ($counts[$cls] ?? 0) + 1;
-				if ($cls !== self::ECHO_DELETE) {
+				if ($cls === self::LOCAL_DELETE && $canWrite) {
+					// Phase 2c-ii: delete the mapped Google event for a deleted NC
+					// object. NC-delete-wins on a 412 conflict (see write service).
+					$status = $this->writeService->deleteLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
+					if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
+						$advance = false;
+					}
 					$this->logger->info(
-						'Calendar Bridge: would handle ' . $cls . ' ' . $uri . ' on calendar ' . $ncCalId,
+						'Calendar Bridge: outbound delete ' . $uri . ' on calendar ' . $ncCalId . ' -> ' . $status,
+						['app' => Application::APP_ID],
+					);
+				} elseif ($cls !== self::ECHO_DELETE) {
+					$this->logger->info(
+						'Calendar Bridge: would handle ' . $cls . ' ' . $uri . ' on calendar ' . $ncCalId
+							. ($cls === self::LOCAL_DELETE ? ' (write scope not granted)' : ''),
 						['app' => Application::APP_ID],
 					);
 				}

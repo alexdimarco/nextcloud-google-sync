@@ -113,4 +113,26 @@ class OutboundWriteServiceTest extends TestCase {
 	public function testResolveConflictUnknownGoogleTimestampIsSafeGoogleWins(): void {
 		$this->assertSame('google_wins', OutboundWriteService::resolveConflict(2000, null));
 	}
+
+	// ----- isForeignDelete (origin-aware 412-delete ownership guard) -----
+
+	public function testForeignDeleteNcOriginWithStrippedTagIsForeign(): void {
+		// An event WE authored whose ncOrigin tag is gone -> no longer ours.
+		$this->assertTrue(OutboundWriteService::isForeignDelete('nc', null, 'evt.ics'));
+	}
+
+	public function testForeignDeleteNcOriginWithRepointedTagIsForeign(): void {
+		$this->assertTrue(OutboundWriteService::isForeignDelete('nc', 'other.ics', 'evt.ics'));
+	}
+
+	public function testForeignDeleteNcOriginWithMatchingTagIsOurs(): void {
+		$this->assertFalse(OutboundWriteService::isForeignDelete('nc', 'evt.ics', 'evt.ics'));
+	}
+
+	public function testForeignDeleteGoogleOriginIsNeverForeign(): void {
+		// A google-origin (imported) event has no tag but is ours by google_id;
+		// it must be deletable under NC-delete-wins (else it resurrects).
+		$this->assertFalse(OutboundWriteService::isForeignDelete('google', null, 'google-master-id'));
+		$this->assertFalse(OutboundWriteService::isForeignDelete('google', 'anything', 'google-master-id'));
+	}
 }

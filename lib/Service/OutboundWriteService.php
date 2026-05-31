@@ -31,9 +31,11 @@ class OutboundWriteService {
 
 	public const CREATED = 'created';
 	public const UPDATED = 'updated';
+	public const DELETED = 'deleted';
 	public const DUPLICATE_ADOPTED = 'duplicate_adopted';
 	public const SKIPPED_RECURRING = 'skipped_recurring';
 	public const SKIPPED_GONE = 'skipped_gone';
+	public const SKIPPED_FOREIGN = 'skipped_foreign';
 	public const CONFLICT = 'conflict';
 	public const ERROR = 'error';
 
@@ -301,6 +303,133 @@ class OutboundWriteService {
 			isset($result['updated']) ? (string)$result['updated'] : null,
 			isset($result['etag']) ? (string)$result['etag'] : null,
 		);
+	}
+
+	/**
+	 * Delete the mapped Google event for a deleted Nextcloud object (LOCAL_DELETE)
+	 * via events.delete with If-Match on the stored baseline etag. Idempotent on a
+	 * 404/410 (already gone). On a 412 (the Google copy changed since our baseline)
+	 * the v1 policy is NC-delete-wins (see resolveDeleteConflict). Never throws.
+	 */
+	public function deleteLocalEventInGoogle(string $userId, string $calId, int $ncCalId, string $ncUri): string {
+		try {
+			$row = $this->eventMapService->getMasterRow($ncCalId, $ncUri);
+			$googleId = $row?->getGoogleId();
+			if ($row === null || $googleId === null || $googleId === '') {
+				// Nothing mapped (e.g. an inbound echo already dropped it). Make
+				// sure no stale rows linger, and treat as done.
+				$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+				return self::SKIPPED_GONE;
+			}
+			$result = $this->deleteGoogleEvent($userId, $calId, $googleId, $row->getBaselineEtag());
+			if (!isset($result['error'])) {
+				$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+				return self::DELETED;
+			}
+			$status = $result['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				// Already gone on Google — idempotent success.
+				$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+				return self::DELETED;
+			}
+			if ($status === 412) {
+				return $this->resolveDeleteConflict($userId, $calId, $ncCalId, $ncUri, $googleId, $row->getOrigin());
+			}
+			$this->logger->warning(
+				'Calendar Bridge: outbound delete failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . '): ' . (string)$result['error'],
+				['app' => Application::APP_ID],
+			);
+			return self::ERROR;
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound delete threw for ' . $ncUri . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return self::ERROR;
+		}
+	}
+
+	/**
+	 * events.delete with If-Match (when a baseline etag is known) + sendUpdates=none.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function deleteGoogleEvent(string $userId, string $calId, string $googleId, ?string $ifMatchEtag): array {
+		$endpoint = 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($googleId) . '?sendUpdates=none';
+		$headers = [];
+		if ($ifMatchEtag !== null && $ifMatchEtag !== '') {
+			$headers['If-Match'] = $ifMatchEtag;
+		}
+		return $this->googleApiService->request($userId, $endpoint, [], 'DELETE', null, $headers);
+	}
+
+	/**
+	 * Whether a 412'd delete target is a FOREIGN Google event we must not destroy.
+	 * Only an NC-authored ('nc') event can become foreign: it should carry our
+	 * ncOrigin tag, so a stripped/repointed tag means the event is no longer the
+	 * one we pushed. A google-origin (imported) event has no tag and is ours by
+	 * its stable google_id (we GET by it), so it is NEVER foreign. Pure.
+	 */
+	public static function isForeignDelete(string $origin, ?string $liveNcOrigin, string $ncUri): bool {
+		return $origin === 'nc' && $liveNcOrigin !== $ncUri;
+	}
+
+	/**
+	 * Resolve a 412 on delete (the Google copy was edited since our baseline).
+	 * v1 policy: NC-delete-wins. Re-GET the live event and re-delete it with the
+	 * fresh etag — UNLESS it is a foreign event we authored but no longer own
+	 * (isForeignDelete), in which case drop the stale mapping without deleting.
+	 * A 404/410 on the re-read means it is already gone.
+	 */
+	private function resolveDeleteConflict(string $userId, string $calId, int $ncCalId, string $ncUri, string $googleId, string $origin): string {
+		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($googleId));
+		if (isset($live['error'])) {
+			$status = $live['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+				return self::DELETED;
+			}
+			$this->logger->warning(
+				'Calendar Bridge: 412 on delete of ' . $ncUri . ' and could not re-read the live event; abandoning (will retry)',
+				['app' => Application::APP_ID],
+			);
+			return self::CONFLICT;
+		}
+		$liveNcOrigin = $live['extendedProperties']['private']['ncOrigin'] ?? null;
+		if (self::isForeignDelete($origin, is_string($liveNcOrigin) ? $liveNcOrigin : null, $ncUri)) {
+			$this->logger->info(
+				'Calendar Bridge: delete of ' . $ncUri . ' hit a Google event that is no longer ours (ncOrigin mismatch); not deleting, dropping mapping',
+				['app' => Application::APP_ID],
+			);
+			$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+			return self::SKIPPED_FOREIGN;
+		}
+		if (!isset($live['etag'])) {
+			$this->logger->warning(
+				'Calendar Bridge: 412 on delete of ' . $ncUri . ' and the live event has no etag; abandoning (will retry)',
+				['app' => Application::APP_ID],
+			);
+			return self::CONFLICT;
+		}
+		$retry = $this->deleteGoogleEvent($userId, $calId, $googleId, (string)$live['etag']);
+		if (isset($retry['error'])) {
+			$status = $retry['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+				return self::DELETED;
+			}
+			$this->logger->warning(
+				'Calendar Bridge: delete conflict on ' . $ncUri . ' re-delete failed (tight race); will retry next tick',
+				['app' => Application::APP_ID],
+			);
+			return self::CONFLICT;
+		}
+		$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+		$this->logger->info(
+			'Calendar Bridge: delete conflict on ' . $ncUri . ' resolved NC-delete-wins; re-deleted',
+			['app' => Application::APP_ID],
+		);
+		return self::DELETED;
 	}
 
 	private function firstVEvent(string $calData): ?VEvent {
