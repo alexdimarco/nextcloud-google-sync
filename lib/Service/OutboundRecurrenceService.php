@@ -38,6 +38,9 @@ use Throwable;
  */
 class OutboundRecurrenceService {
 
+	/** Max per-series instance writes per reconcile tick (circuit breaker). */
+	private const INSTANCE_OP_BUDGET = 100;
+
 	public function __construct(
 		private CalDavBackend $caldavBackend,
 		private GoogleAPIService $googleApiService,
@@ -315,6 +318,7 @@ class OutboundRecurrenceService {
 
 		$deferred = false;
 		$parked = false;
+		$ops = 0;
 		foreach ([...array_keys($intent['exdates']), ...array_keys($intent['overrides'])] as $key) {
 			if (isset($collisions[$key])) {
 				$this->logger->warning(
@@ -330,12 +334,25 @@ class OutboundRecurrenceService {
 				$deferred = true;
 				continue;
 			}
+			// Per-tick circuit breaker: cap the per-series instance writes so a
+			// pathological series (hundreds of customized occurrences) cannot make
+			// unbounded API calls in one cron tick. The remainder syncs on a later
+			// edit / full pull (logged).
+			if ($ops >= self::INSTANCE_OP_BUDGET) {
+				$this->logger->warning(
+					'Calendar Bridge: series ' . $ncUri . ' exceeded the per-tick instance-op budget (' . self::INSTANCE_OP_BUDGET . '); remaining instances deferred',
+					['app' => Application::APP_ID],
+				);
+				$deferred = true;
+				break;
+			}
 			$rawToken = $this->rawOriginalStart($inst['ost']);
 			$base = $siblingBaseline[$key] ?? null;
 			$isExdate = isset($intent['exdates'][$key]);
 			$outcome = $isExdate
 				? $this->cancelInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken, $base, $ncLastMod)
 				: $this->overrideInstance($userId, $calId, $ncCalId, $ncUri, $inst, $intent['overrides'][$key], $rawToken, $base, $ncLastMod);
+			$ops++;
 			if ($outcome === OutboundWriteService::ERROR) {
 				return OutboundWriteService::ERROR;
 			}
