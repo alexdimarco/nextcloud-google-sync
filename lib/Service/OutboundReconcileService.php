@@ -211,13 +211,25 @@ class OutboundReconcileService {
 					$cls = $this->classifyOne($ncCalId, $type, $uri);
 					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
 					if ($cls === self::LOCAL_NEW && $canWrite) {
-						// Phase 2b: the only classification that actually writes.
+						// Phase 2b: create a Nextcloud-originated event in Google.
 						$status = $this->writeService->createLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
 						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
 						$this->logger->info(
 							'Calendar Bridge: outbound create ' . $uri . ' on calendar ' . $ncCalId . ' -> ' . $status,
+							['app' => Application::APP_ID],
+						);
+					} elseif ($cls === self::LOCAL_EDIT && $canWrite) {
+						// Phase 2c: push a Nextcloud-side edit to Google. (An
+						// INDETERMINATE edit — null baseline — is NOT this branch;
+						// it falls through to log-only and must not hold the token.)
+						$status = $this->writeService->updateLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
+						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
+							$advance = false;
+						}
+						$this->logger->info(
+							'Calendar Bridge: outbound update ' . $uri . ' on calendar ' . $ncCalId . ' -> ' . $status,
 							['app' => Application::APP_ID],
 						);
 					} elseif ($cls !== self::ECHO) {

@@ -39,7 +39,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 /**
  * Service to make requests to Google v3 (JSON) API
  *
- * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>, extendedProperties?: array{private?: array<string, string>, shared?: array<string, string>}}
+ * @phpstan-type Event array{id: string, iCalUID: string, etag?: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>, extendedProperties?: array{private?: array<string, string>, shared?: array<string, string>}}
  */
 class GoogleCalendarAPIService {
 	private DateTimeZone $utcTimezone;
@@ -628,7 +628,7 @@ class GoogleCalendarAPIService {
 			if ($ncOrigin !== null && $ncOrigin !== '') {
 				$original = $this->caldavBackend->getCalendarObject($ncCalId, $ncOrigin);
 				if ($original !== null) {
-					$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null);
+					$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $e['etag'] ?? null);
 					if ($unseenURIs->contains($ncOrigin)) {
 						$unseenURIs->remove($ncOrigin);
 					}

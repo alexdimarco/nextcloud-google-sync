@@ -91,4 +91,26 @@ class OutboundWriteServiceTest extends TestCase {
 		$start = ['dateTime' => '2026-06-01T15:00:00+00:00'];
 		$this->assertSame($start, OutboundWriteService::deriveMissingEnd($start, false));
 	}
+
+	// ----- resolveConflict (LWW on a 412) -----
+
+	public function testResolveConflictNcNewerWins(): void {
+		$this->assertSame('nc_wins', OutboundWriteService::resolveConflict(2000, 1000));
+	}
+
+	public function testResolveConflictGoogleNewerWins(): void {
+		$this->assertSame('google_wins', OutboundWriteService::resolveConflict(1000, 2000));
+	}
+
+	public function testResolveConflictTieGoesToNc(): void {
+		$this->assertSame('nc_wins', OutboundWriteService::resolveConflict(1500, 1500));
+	}
+
+	public function testResolveConflictUnknownNcTimestampIsSafeGoogleWins(): void {
+		$this->assertSame('google_wins', OutboundWriteService::resolveConflict(null, 1000));
+	}
+
+	public function testResolveConflictUnknownGoogleTimestampIsSafeGoogleWins(): void {
+		$this->assertSame('google_wins', OutboundWriteService::resolveConflict(2000, null));
+	}
 }
