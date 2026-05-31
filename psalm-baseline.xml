@@ -168,11 +168,12 @@
     </MissingDependency>
     <UndefinedClass>
       <code><![CDATA[$master->RDATE]]></code>
+      <code><![CDATA[$master->RDATE]]></code>
+      <code><![CDATA[$master->RRULE]]></code>
       <code><![CDATA[$master->RRULE]]></code>
       <code><![CDATA[?VEvent]]></code>
       <code><![CDATA[?VEvent]]></code>
       <code><![CDATA[Reader]]></code>
-      <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>

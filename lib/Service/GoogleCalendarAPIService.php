@@ -587,6 +587,25 @@ class GoogleCalendarAPIService {
 	}
 
 	/**
+	 * Seed the outbound differ's refusal-guard baselines (shape/RRULE/DTSTART)
+	 * for an imported RECURRING series, so the FIRST NC edit is diffed against the
+	 * pre-edit shape (a DTSTART move / shape flip / this-and-following split on an
+	 * imported series would otherwise bypass the guards, which only fire on a
+	 * non-null baseline). Only for recurring events; cheap; defensive.
+	 *
+	 * @param Event $e
+	 */
+	private function seedImportedSeriesBaseline(int $ncCalId, string $objectUri, array $e, string $calData): void {
+		if (!isset($e['recurrence'])) {
+			return;
+		}
+		$b = OutboundRecurrenceService::seriesBaselineFromCalData($calData);
+		if ($b !== null) {
+			$this->eventMapService->recordSeriesBaseline($ncCalId, $objectUri, $b['shape'], $b['rrule'], $b['dtstartSig']);
+		}
+	}
+
+	/**
 	 * get the most recent event update date in a calendar
 	 *
 	 * @param int $calendarId
@@ -938,6 +957,7 @@ class GoogleCalendarAPIService {
 					$ncEtag = $this->caldavBackend->updateCalendarObject($ncCalId, $objectUri, $calData);
 					$nbUpdated++;
 					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental, $ncEtag);
+					$this->seedImportedSeriesBaseline($ncCalId, $objectUri, $e, $calData);
 				} catch (Exception|Throwable $ex) {
 					$this->logger->warning('Error when updating calendar event ' . $ex->getMessage(), ['app' => Application::APP_ID]);
 				}
@@ -946,6 +966,7 @@ class GoogleCalendarAPIService {
 					$ncEtag = $this->caldavBackend->createCalendarObject($ncCalId, $objectUri, $calData);
 					$nbAdded++;
 					$this->eventMapService->recordFromImport($ncCalId, $e, $exceptions, !$isIncremental, $ncEtag);
+					$this->seedImportedSeriesBaseline($ncCalId, $objectUri, $e, $calData);
 				} catch (BadRequest $ex) {
 					if (strpos($ex->getMessage(), 'uid already exists') !== false) {
 						$this->logger->debug('Skip existing event', ['app' => Application::APP_ID]);

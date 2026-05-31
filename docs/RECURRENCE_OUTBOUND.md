@@ -199,3 +199,33 @@ The differ records each sibling immediately (step 8) so work is durable per-op. 
 - DESTRUCTIVE RECURRENCE TRANSITIONS (was HIGH-6/27, MED-14/20): DTSTART move, THISANDFUTURE split, single<->recurring, all-day<->timed flip, RDATE-add all re-anchor or split the series and would orphan/duplicate/data-loss if the differ blindly applied them. MITIGATED by §6 refusal guards (detect -> SKIPPED_UNSUPPORTED, stay one-way). Risk: a transition shape the guards don't anticipate slips through and corrupts; the guards must be conservative (refuse on any baseline mismatch) and the baseline columns must be reliably populated.
 - OVERRIDE-DELETED-WITHOUT-EXDATE (was HIGH-16): deleting an already-edited occurrence commonly removes the override VEVENT with NO compensating EXDATE — indistinguishable from revert-to-default from the .ics alone. v1 PARKS it (leaves the Google override, logs), which means a real single-occurrence delete of an edited instance may NOT propagate. Non-corrupting but a genuine user-visible gap; needs the owner's semantic decision.
 - DST-fold / sub-daily ambiguity (was MED-3): two occurrences can canonicalize to one UTC instant, or a gap-hour wall time shifts. MITIGATED by requiring exactly-one live instance at {kind,key}; zero-or-many -> park. Sub-daily EXDATE cancellation is explicitly unsupported when uniqueness fails.
+
+## Review-driven changes (round 1) and v1 limitations
+
+The Phase-4 adversarial review (8 confirmed findings) drove these changes:
+- Guard baselines (shape/RRULE/DTSTART) are now SEEDED at import for recurring
+  series (`seedImportedSeriesBaseline`), so the FIRST NC edit of an imported
+  series is diffed against its pre-edit shape (else a DTSTART move / shape flip /
+  this-and-following split on an imported series bypassed the refusal guards).
+- Incomplete instance diffs RESUME: the master Google baseline is refreshed
+  immediately, but `nc_etag` (the ECHO marker) is set ONLY on a complete diff;
+  ERROR/DEFERRED_INSTANCE hold the change token, so the series re-classifies as
+  LOCAL_EDIT next tick and the differ resumes idempotently (CREATE resets nc_etag
+  so it too resumes). DEFERRED_INSTANCE now holds the token.
+- EXDATE removal RESTORES a previously-cancelled occurrence (cancelled sibling
+  rows are iterated and patched back to status=confirmed).
+- Per-instance writes are NC-WINS (no per-instance LWW). A master PATCH propagates
+  master fields (e.g. summary) onto its instances, RESETTING overrides; a
+  per-instance LWW would mistake our own reset for a concurrent Google edit and
+  drop the override (verified). Outbound therefore re-asserts NC's overrides;
+  Google-side per-instance edits made while NC is QUIESCENT are captured inbound
+  by the sibling-aware echo gate. Net per-instance conflict policy: the side that
+  most recently edited the SERIES wins (a coarse LWW), consistent with ties->NC.
+
+Accepted v1 limitations (non-corrupting, documented):
+- A Google-side per-instance edit CONCURRENT with an NC series edit resolves
+  NC-wins for that tick (the master-PATCH propagation resets it regardless);
+  it re-syncs inbound once NC is quiescent.
+- A multi-instance outbound edit can trigger ONE spurious inbound re-render
+  (stale sibling baselines from intra-series etag bumps); it self-corrects via
+  the inbound sibling-baseline refresh and converges.

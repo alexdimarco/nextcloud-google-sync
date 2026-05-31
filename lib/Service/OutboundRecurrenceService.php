@@ -115,10 +115,15 @@ class OutboundRecurrenceService {
 				'Calendar Bridge: created Google series ' . $masterId . ' from local ' . $ncUri,
 				['app' => Application::APP_ID],
 			);
-			$this->runInstanceDiff(
-				$userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata'],
-				isset($obj['lastmodified']) ? (int)$obj['lastmodified'] : null,
-			);
+			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
+			if ($diffStatus === OutboundWriteService::ERROR || $diffStatus === OutboundWriteService::DEFERRED_INSTANCE) {
+				// Master created, but some initial overrides/EXDATEs are unfinished.
+				// recordLocalNew set nc_etag = the current NC etag (-> ECHO), which
+				// would strand them; reset it so the object re-classifies as
+				// LOCAL_EDIT next tick and the differ resumes (idempotently).
+				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, '', null, null);
+				return $diffStatus;
+			}
 			return OutboundWriteService::CREATED;
 		} catch (Throwable $e) {
 			$this->logger->warning(
@@ -150,10 +155,14 @@ class OutboundRecurrenceService {
 			}
 			$ncLastMod = isset($obj['lastmodified']) ? (int)$obj['lastmodified'] : null;
 
-			// 1) MASTER PATCH (recurrence[] = RRULE only).
+			// 1) MASTER PATCH (recurrence[] = RRULE only). Refresh the master's
+			// Google baseline immediately (NOT nc_etag) so a resumed run's re-PATCH
+			// matches and does not false-412.
 			$body = $this->buildMasterBody($master, $ncUri);
 			$result = $this->patchGoogleEvent($userId, $calId, $masterId, $body, $row->getBaselineEtag());
-			if (isset($result['error'])) {
+			if (!isset($result['error'])) {
+				$this->recordMasterBaseline($ncCalId, $ncUri, $result);
+			} else {
 				$status = $result['statusCode'] ?? null;
 				if ($status === 404 || $status === 410) {
 					$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
@@ -162,9 +171,9 @@ class OutboundRecurrenceService {
 				if ($status === 412) {
 					$masterStatus = $this->resolveMasterConflict($userId, $calId, $ncCalId, $ncUri, $masterId, $body, $ncLastMod);
 					if ($masterStatus !== null) {
-						return $masterStatus; // CONFLICT_PARKED (Google won) — stop, no instance churn
+						return $masterStatus; // CONFLICT_PARKED (Google won) / ERROR — stop
 					}
-					// NC won + re-patched: fall through to the instance diff.
+					// NC won + re-patched (baseline recorded inside) — continue.
 				} else {
 					$this->logger->warning(
 						'Calendar Bridge: series master PATCH failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . ')',
@@ -175,10 +184,16 @@ class OutboundRecurrenceService {
 			}
 
 			// 2) per-instance overrides + EXDATE cancellations.
-			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata'], $ncLastMod);
+			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
 
-			// 3) authoritative master re-GET so inbound reads the whole series as ECHO.
-			$this->recordMasterEcho($userId, $calId, $ncCalId, $ncUri, $masterId, $master, $obj);
+			// 3) Converge ONLY on a complete diff: set nc_etag (so the series reads
+			// ECHO) + the guard baselines. On ERROR/DEFERRED leave nc_etag at its
+			// pre-edit value so the object re-classifies LOCAL_EDIT next tick and the
+			// differ resumes (the calendar token is held by the reconciler).
+			if ($diffStatus !== OutboundWriteService::ERROR && $diffStatus !== OutboundWriteService::DEFERRED_INSTANCE) {
+				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, isset($obj['etag']) ? (string)$obj['etag'] : null, null, null);
+				$this->recordSeriesBaseline($ncCalId, $ncUri, $master);
+			}
 			$this->logger->info(
 				'Calendar Bridge: updated Google series ' . $masterId . ' from local ' . $ncUri . ' (' . $diffStatus . ')',
 				['app' => Application::APP_ID],
@@ -239,19 +254,17 @@ class OutboundRecurrenceService {
 		if (isset($retry['error'])) {
 			return OutboundWriteService::ERROR;
 		}
+		$this->recordMasterBaseline($ncCalId, $ncUri, $retry);
 		return null; // NC won, re-patched
 	}
 
-	/** Authoritative master re-GET; record nc_etag=current NC etag + fresh google baseline. */
-	private function recordMasterEcho(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, VEvent $master, array $obj): void {
-		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($masterId));
+	/** Refresh the master row's Google baseline (etag + updated) — NOT nc_etag. */
+	private function recordMasterBaseline(int $ncCalId, string $ncUri, array $result): void {
 		$this->eventMapService->recordOutboundUpdate(
-			$ncCalId, $ncUri,
-			isset($obj['etag']) ? (string)$obj['etag'] : null,
-			isset($live['updated']) && is_string($live['updated']) ? (string)$live['updated'] : null,
-			isset($live['etag']) && is_string($live['etag']) ? (string)$live['etag'] : null,
+			$ncCalId, $ncUri, null,
+			isset($result['updated']) && is_string($result['updated']) ? $result['updated'] : null,
+			isset($result['etag']) && is_string($result['etag']) ? $result['etag'] : null,
 		);
-		$this->recordSeriesBaseline($ncCalId, $ncUri, $master);
 	}
 
 	/**
@@ -293,33 +306,41 @@ class OutboundRecurrenceService {
 	 * failure (holds the token). NC object lastmodified is the single (coarse) NC
 	 * timestamp for every per-instance LWW.
 	 */
-	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData, ?int $ncLastMod): string {
+	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData): string {
 		$intent = $this->buildNcIntent($calData);
-		if ($intent['overrides'] === [] && $intent['exdates'] === []) {
+		// The keys we have CANCELLED — a cancelled slot no longer EXDATE'd/
+		// overridden in NC means the user REMOVED the EXDATE, so the occurrence
+		// must be RESTORED.
+		$cancelledTimes = [];
+		$restoreKeys = [];
+		foreach ($this->eventMapService->findSiblings($ncCalId, $ncUri) as $row) {
+			$k = RecurrenceKey::fromGoogleToken($row->getRecurrenceId());
+			if ($k === null) {
+				continue;
+			}
+			if ($row->getState() === 'cancelled' && !isset($intent['exdates'][$k]) && !isset($intent['overrides'][$k])) {
+				$restoreKeys[$k] = true;
+				$t = $this->tokenTime($row->getRecurrenceId());
+				if ($t !== null) {
+					$cancelledTimes[] = $t;
+				}
+			}
+		}
+		if ($intent['overrides'] === [] && $intent['exdates'] === [] && $restoreKeys === []) {
 			return OutboundWriteService::UPDATED; // nothing per-instance to do
 		}
-		[$timeMin, $timeMax] = $this->window($intent['times']);
+		[$timeMin, $timeMax] = $this->window([...$intent['times'], ...$cancelledTimes]);
 		$live = $this->listLiveInstances($userId, $calId, $masterId, $timeMin, $timeMax);
 		if ($live['error']) {
 			return OutboundWriteService::ERROR; // transient; hold + retry
 		}
 		$byKey = $live['byKey'];
 		$collisions = $live['collisions'];
-		// Our recorded per-instance baselines, keyed canonically — the echo-vs-edit
-		// discriminator: a live instance whose etag still matches our baseline is
-		// our own write (or a slot we just generated), NOT a concurrent change.
-		$siblingBaseline = [];
-		foreach ($this->eventMapService->findSiblings($ncCalId, $ncUri) as $row) {
-			$k = RecurrenceKey::fromGoogleToken($row->getRecurrenceId());
-			if ($k !== null) {
-				$siblingBaseline[$k] = $row->getBaselineEtag();
-			}
-		}
 
 		$deferred = false;
 		$parked = false;
 		$ops = 0;
-		foreach ([...array_keys($intent['exdates']), ...array_keys($intent['overrides'])] as $key) {
+		foreach ([...array_keys($intent['exdates']), ...array_keys($intent['overrides']), ...array_keys($restoreKeys)] as $key) {
 			if (isset($collisions[$key])) {
 				$this->logger->warning(
 					'Calendar Bridge: series ' . $ncUri . ' instance ' . $key . ' is ambiguous (multiple live instances); skipping',
@@ -347,17 +368,16 @@ class OutboundRecurrenceService {
 				break;
 			}
 			$rawToken = $this->rawOriginalStart($inst['ost']);
-			$base = $siblingBaseline[$key] ?? null;
-			$isExdate = isset($intent['exdates'][$key]);
-			$outcome = $isExdate
-				? $this->cancelInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken, $base, $ncLastMod)
-				: $this->overrideInstance($userId, $calId, $ncCalId, $ncUri, $inst, $intent['overrides'][$key], $rawToken, $base, $ncLastMod);
+			if (isset($intent['exdates'][$key])) {
+				$outcome = $this->cancelInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken);
+			} elseif (isset($intent['overrides'][$key])) {
+				$outcome = $this->overrideInstance($userId, $calId, $ncCalId, $ncUri, $inst, $intent['overrides'][$key], $rawToken);
+			} else {
+				$outcome = $this->restoreInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken);
+			}
 			$ops++;
 			if ($outcome === OutboundWriteService::ERROR) {
 				return OutboundWriteService::ERROR;
-			}
-			if ($outcome === OutboundWriteService::CONFLICT_PARKED) {
-				$parked = true;
 			}
 		}
 		if ($deferred) {
@@ -367,27 +387,59 @@ class OutboundRecurrenceService {
 	}
 
 	/**
-	 * Ensure one occurrence is CANCELLED on Google (an NC EXDATE). Idempotent on
-	 * an already-cancelled instance or a 404/410. Per-instance LWW: if Google
-	 * edited the instance more recently, leave it (park). Records the sibling
-	 * 'cancelled' (kept, so a later EXDATE-removal can restore it).
+	 * Restore an occurrence the user un-EXDATE'd: if the live instance is still
+	 * cancelled (our cancel), patch it back to confirmed and record the sibling
+	 * synced. Google then re-expands it from the master RRULE.
 	 *
 	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
 	 */
-	private function cancelInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken, ?string $siblingBaseline, ?int $ncLastMod): string {
+	private function restoreInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): string {
+		if ($inst['status'] !== 'cancelled') {
+			$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], is_string($inst['updated']) ? $inst['updated'] : null, is_string($inst['etag']) ? $inst['etag'] : null);
+			return OutboundWriteService::UPDATED;
+		}
+		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'confirmed'], $inst['etag']);
+		$res = $out['result'];
+		if (isset($res['error'])) {
+			$status = $res['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				return OutboundWriteService::UPDATED;
+			}
+			return OutboundWriteService::ERROR;
+		}
+		$this->eventMapService->recordOutboundSibling(
+			$ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'],
+			isset($res['updated']) ? (string)$res['updated'] : $out['updated'],
+			isset($res['etag']) ? (string)$res['etag'] : $out['etag'],
+		);
+		return OutboundWriteService::UPDATED;
+	}
+
+	/** Parse a raw Google originalStartTime token into a DateTime (for the window). */
+	private function tokenTime(string $token): ?DateTimeInterface {
+		if ($token === '') {
+			return null;
+		}
+		try {
+			return new DateTimeImmutable($token);
+		} catch (Throwable) {
+			return null;
+		}
+	}
+
+	/**
+	 * Ensure one occurrence is CANCELLED on Google (an NC EXDATE). NC-wins: the
+	 * user EXDATE'd it. Idempotent on an already-cancelled instance or a 404/410.
+	 * Records the sibling 'cancelled' (kept, so a later EXDATE-removal restores it).
+	 *
+	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 */
+	private function cancelInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): string {
 		if ($inst['status'] === 'cancelled') {
 			$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
 			return OutboundWriteService::UPDATED;
 		}
-		if (!$this->instanceNcWins($siblingBaseline, $inst['etag'], $inst['updated'], $ncLastMod)) {
-			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $inst['etag'], $inst['updated']);
-			return OutboundWriteService::CONFLICT_PARKED;
-		}
-		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'cancelled'], $inst['etag'], $siblingBaseline, $ncLastMod);
-		if ($out['parked']) {
-			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $out['etag'], $out['updated']);
-			return OutboundWriteService::CONFLICT_PARKED;
-		}
+		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'cancelled'], $inst['etag']);
 		$res = $out['result'];
 		if (isset($res['error'])) {
 			$status = $res['statusCode'] ?? null;
@@ -395,7 +447,7 @@ class OutboundRecurrenceService {
 				$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
 				return OutboundWriteService::UPDATED;
 			}
-			return $status === 412 ? OutboundWriteService::CONFLICT_PARKED : OutboundWriteService::ERROR;
+			return OutboundWriteService::ERROR;
 		}
 		$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
 		return OutboundWriteService::UPDATED;
@@ -403,30 +455,26 @@ class OutboundRecurrenceService {
 
 	/**
 	 * Ensure one occurrence carries the NC OVERRIDE's content on Google (a
-	 * RECURRENCE-ID VEVENT). PATCH (partial) preserves Google-side attendees;
-	 * status='confirmed' also restores a previously-cancelled slot.
+	 * RECURRENCE-ID VEVENT). NC-wins: an outbound series edit always re-asserts
+	 * NC's overrides — the master PATCH propagates master fields onto instances,
+	 * resetting overrides, so a per-instance LWW would mistake our own reset for a
+	 * Google edit and drop the override. Google-side instance edits made while NC
+	 * is quiescent are captured INBOUND (the sibling-aware echo gate). PATCH is
+	 * partial so Google-side attendees survive; status='confirmed' un-cancels.
 	 *
 	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
 	 */
-	private function overrideInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, VEvent $ov, string $rawToken, ?string $siblingBaseline, ?int $ncLastMod): string {
-		if (!$this->instanceNcWins($siblingBaseline, $inst['etag'], $inst['updated'], $ncLastMod)) {
-			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $inst['etag'], $inst['updated']);
-			return OutboundWriteService::CONFLICT_PARKED;
-		}
+	private function overrideInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, VEvent $ov, string $rawToken): string {
 		$body = OutboundWriteService::buildEventFields($ov, $ncUri, true);
 		$body['status'] = 'confirmed';
-		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], $body, $inst['etag'], $siblingBaseline, $ncLastMod);
-		if ($out['parked']) {
-			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $out['etag'], $out['updated']);
-			return OutboundWriteService::CONFLICT_PARKED;
-		}
+		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], $body, $inst['etag']);
 		$res = $out['result'];
 		if (isset($res['error'])) {
 			$status = $res['statusCode'] ?? null;
 			if ($status === 404 || $status === 410) {
 				return OutboundWriteService::UPDATED; // instance vanished; nothing to override
 			}
-			return $status === 412 ? OutboundWriteService::CONFLICT_PARKED : OutboundWriteService::ERROR;
+			return OutboundWriteService::ERROR;
 		}
 		$this->eventMapService->recordOutboundSibling(
 			$ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'],
@@ -439,49 +487,25 @@ class OutboundRecurrenceService {
 	/**
 	 * Patch an instance with If-Match; on a 412 — which a sibling instance's own
 	 * mutation routinely triggers, since all instances of a series share an etag
-	 * lineage — re-GET the live instance and retry once if NC still wins
-	 * (echo-vs-edit + LWW against the FRESH etag), else report parked. Returns the
-	 * final response, whether the instance is parked, and the fresh etag/updated.
+	 * lineage — re-GET the live instance and retry once with the FRESH etag
+	 * (NC-wins). Returns the final response + the fresh etag/updated.
 	 *
 	 * @param array<string, mixed> $body
-	 * @return array{result: array<string, mixed>, parked: bool, etag: ?string, updated: ?string}
+	 * @return array{result: array<string, mixed>, etag: ?string, updated: ?string}
 	 */
-	private function patchInstanceResilient(string $userId, string $calId, string $instanceId, array $body, ?string $etag, ?string $siblingBaseline, ?int $ncLastMod): array {
+	private function patchInstanceResilient(string $userId, string $calId, string $instanceId, array $body, ?string $etag): array {
 		$res = $this->patchGoogleEvent($userId, $calId, $instanceId, $body, $etag);
 		if (!isset($res['error']) || ($res['statusCode'] ?? null) !== 412) {
-			return ['result' => $res, 'parked' => false, 'etag' => $etag, 'updated' => null];
+			return ['result' => $res, 'etag' => $etag, 'updated' => null];
 		}
 		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($instanceId));
 		if (isset($live['error']) || !isset($live['etag'])) {
-			return ['result' => $res, 'parked' => false, 'etag' => $etag, 'updated' => null];
+			return ['result' => $res, 'etag' => $etag, 'updated' => null];
 		}
 		$liveEtag = (string)$live['etag'];
 		$liveUpdated = isset($live['updated']) && is_string($live['updated']) ? $live['updated'] : null;
-		if (!$this->instanceNcWins($siblingBaseline, $liveEtag, $liveUpdated, $ncLastMod)) {
-			return ['result' => $live, 'parked' => true, 'etag' => $liveEtag, 'updated' => $liveUpdated];
-		}
 		$retry = $this->patchGoogleEvent($userId, $calId, $instanceId, $body, $liveEtag);
-		return ['result' => $retry, 'parked' => false, 'etag' => $liveEtag, 'updated' => $liveUpdated];
-	}
-
-	/**
-	 * Whether NC should win for this instance. Mirrors the master echo-vs-edit
-	 * rule: no recorded baseline, or the live etag still equals our baseline (our
-	 * own write / a slot we just generated) -> no concurrent Google change -> NC
-	 * writes. Only a live etag that DIFFERS from our baseline is a genuine
-	 * Google-side change, resolved by LWW.
-	 */
-	private function instanceNcWins(?string $siblingBaseline, ?string $liveEtag, ?string $liveUpdated, ?int $ncLastMod): bool {
-		if ($siblingBaseline === null || $siblingBaseline === '' || ($liveEtag !== null && $liveEtag === $siblingBaseline)) {
-			return true;
-		}
-		$googleUpdated = is_string($liveUpdated) ? strtotime($liveUpdated) : false;
-		return OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated) === 'nc_wins';
-	}
-
-	/** Record a sibling whose Google instance won LWW: baseline=live etag so it reads ECHO. */
-	private function recordParkedSibling(int $ncCalId, string $ncUri, string $rawToken, string $instanceId, ?string $etag, ?string $updated): void {
-		$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, $instanceId, $updated, $etag);
+		return ['result' => $retry, 'etag' => $liveEtag, 'updated' => $liveUpdated];
 	}
 
 	/**
@@ -674,7 +698,7 @@ class OutboundRecurrenceService {
 
 	private function recordSeriesBaseline(int $ncCalId, string $ncUri, VEvent $master): void {
 		$shape = (isset($master->RRULE) || isset($master->RDATE)) ? 'recurring' : 'single';
-		$this->eventMapService->recordSeriesBaseline($ncCalId, $ncUri, $shape, self::extractRrule($master), $this->masterDtstartSignature($master));
+		$this->eventMapService->recordSeriesBaseline($ncCalId, $ncUri, $shape, self::extractRrule($master), self::masterDtstartSignature($master));
 	}
 
 	/**
@@ -717,7 +741,7 @@ class OutboundRecurrenceService {
 			$row?->getShape(),
 			self::extractRrule($master),
 			$row?->getBaselineRrule(),
-			$this->masterDtstartSignature($master),
+			self::masterDtstartSignature($master),
 			$row?->getMasterDtstart(),
 			isset($master->RDATE),
 			$this->masterTzidResolvable($master),
@@ -795,7 +819,26 @@ class OutboundRecurrenceService {
 	 * value. Stable across DST (the wall value is fixed); changes on a real
 	 * DTSTART move, a zone change, or an all-day<->timed flip.
 	 */
-	private function masterDtstartSignature(VEvent $master): string {
+	/**
+	 * The refusal-guard baselines for a recurring NC series .ics, or null if it
+	 * has no master VEVENT. Lets the inbound importer seed them so the FIRST NC
+	 * edit of an imported series is diffed against its pre-edit shape. Pure (Sabre).
+	 *
+	 * @return array{shape: string, rrule: string, dtstartSig: string}|null
+	 */
+	public static function seriesBaselineFromCalData(string $calData): ?array {
+		$master = self::parseMaster($calData);
+		if ($master === null) {
+			return null;
+		}
+		return [
+			'shape' => (isset($master->RRULE) || isset($master->RDATE)) ? 'recurring' : 'single',
+			'rrule' => self::extractRrule($master),
+			'dtstartSig' => self::masterDtstartSignature($master),
+		];
+	}
+
+	private static function masterDtstartSignature(VEvent $master): string {
 		$dtstart = $master->DTSTART ?? null;
 		if ($dtstart === null) {
 			return '';
