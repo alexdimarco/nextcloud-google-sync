@@ -16,6 +16,7 @@ use OCA\CalendarBridge\AppInfo\Application;
 use OCA\CalendarBridge\Service\GoogleCalendarAPIService;
 use OCA\CalendarBridge\Service\GoogleContactsAPIService;
 use OCA\CalendarBridge\Service\GoogleDriveAPIService;
+use OCA\CalendarBridge\Service\OutboundReconcileService;
 use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\DataResponse;
@@ -37,6 +38,7 @@ class GoogleAPIController extends Controller {
 		private GoogleContactsAPIService $googleContactsAPIService,
 		private GoogleDriveAPIService $googleDriveAPIService,
 		private GoogleCalendarAPIService $googleCalendarAPIService,
+		private OutboundReconcileService $outboundReconcileService,
 		private ?string $userId,
 		private SecretService $secretService,
 	) {
@@ -98,6 +100,7 @@ class GoogleAPIController extends Controller {
 				$isJobRegistered = $this->googleCalendarAPIService->
 					isJobRegisteredForCalendar($this->userId, $cal["id"]);
 				$result[$key]["isJobRegistered"] = $isJobRegistered;
+				$result[$key]["isTwoWayEnabled"] = $this->outboundReconcileService->isTwoWayEnabled($this->userId, $cal["id"]);
 			}
 			$response = new DataResponse($result);
 		}
@@ -221,6 +224,31 @@ class GoogleAPIController extends Controller {
 		} else {
 			return $this->unregisterSyncCalendar($calId);
 		}
+	}
+
+	/**
+	 * Turn two-way (Nextcloud -> Google) sync on/off for one calendar.
+	 * Enabling is rejected unless the user granted the read-write
+	 * calendar.events scope (defense in depth — the UI also hides the toggle).
+	 *
+	 * @NoAdminRequired
+	 *
+	 * @param string $calId
+	 * @param bool $desiredState
+	 * @return DataResponse
+	 */
+	public function setTwoWaySync(string $calId, bool $desiredState): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse('', 400);
+		}
+		if ($desiredState && !$this->outboundReconcileService->hasWriteScope($this->userId)) {
+			return new DataResponse(
+				['error' => 'The read-write calendar scope has not been granted; reconnect your Google account to enable two-way sync.'],
+				403,
+			);
+		}
+		$this->outboundReconcileService->setTwoWayEnabled($this->userId, $calId, $desiredState);
+		return new DataResponse(['calId' => $calId, 'isTwoWayEnabled' => $desiredState]);
 	}
 
 	/**

@@ -57,6 +57,29 @@ class OutboundReconcileService {
 	}
 
 	/**
+	 * Turn two-way (outbound) sync on/off for one calendar. Enabling resets the
+	 * NC change-token baseline so the reconciler re-baselines on its next run
+	 * (it must not replay the whole calendar as outbound). Disabling clears both
+	 * the flag and the token.
+	 *
+	 * Disabling intentionally RETAINS the nc-origin event-map rows from prior
+	 * outbound writes. This is safe in the current phase: the only writing
+	 * classification is LOCAL_NEW, which requires the absence of a map row, so
+	 * surviving rows only steer ECHO/LOCAL_EDIT (log-only), and re-enable resets
+	 * the token so nothing replays. A future phase that activates LOCAL_EDIT/
+	 * LOCAL_DELETE writes must revisit pruning/re-baselining these rows.
+	 */
+	public function setTwoWayEnabled(string $userId, string $calId, bool $enabled): void {
+		if ($enabled) {
+			$this->config->setUserValue($userId, Application::APP_ID, $this->twoWayKey($calId), '1');
+		} else {
+			$this->config->deleteUserValue($userId, Application::APP_ID, $this->twoWayKey($calId));
+		}
+		// Force a fresh baseline next reconcile either way.
+		$this->config->deleteUserValue($userId, Application::APP_ID, $this->changeTokenKey($calId));
+	}
+
+	/**
 	 * Whether the user granted the read-write calendar.events scope. Gates all
 	 * outbound writes (the widen-and-gate model: existing read-only users have
 	 * no can_write_calendar key, so writes stay off until they reconnect).

@@ -31,6 +31,7 @@ use OCP\IL10N;
 use OCP\IRequest;
 use OCP\IURLGenerator;
 use OCP\Security\ICrypto;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 class ConfigController extends Controller {
@@ -42,6 +43,24 @@ class ConfigController extends Controller {
 	public const CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
 	// Read-write events scope required for outbound (NC -> Google) sync.
 	public const CALENDAR_EVENTS_WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+
+	// The only preferences a user may set through the generic setConfig
+	// endpoint. Everything else — user_scopes, token/refresh_token,
+	// two_way_*/nc_change_token_*/sync_token_* — is security-authority state
+	// written only by its dedicated, gated path.
+	private const USER_SETTABLE_KEYS = [
+		'user_name',
+		'consider_all_events',
+		'consider_other_contacts',
+		'consider_shared_files',
+		'consider_shared_albums',
+		'document_format',
+		'drive_output_dir',
+		'drive_shared_with_me_output_dir',
+		'importing_drive',
+		'oauth_state',
+		'redirect_uri',
+	];
 
 	public function __construct(
 		string $appName,
@@ -56,6 +75,7 @@ class ConfigController extends Controller {
 		private ?string $userId,
 		private ICrypto $crypto,
 		private SecretService $secretService,
+		private LoggerInterface $logger,
 	) {
 		parent::__construct($appName, $request);
 	}
@@ -71,7 +91,21 @@ class ConfigController extends Controller {
 		if ($this->userId === null) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}
+		// Only genuine user-settable preferences may be written through this
+		// generic endpoint. Without this allowlist an authenticated user could
+		// forge their own security-authority prefs — user_scopes (faking
+		// can_write_calendar), the two_way_* / nc_change_token_* / sync_token_*
+		// state, or even token/refresh_token — defeating the write-scope gate
+		// and tampering with credentials. user_scopes is written ONLY by the
+		// OAuth redirect; the two-way flag ONLY by setTwoWaySync.
 		foreach ($values as $key => $value) {
+			if (!in_array($key, self::USER_SETTABLE_KEYS, true)) {
+				$this->logger->warning(
+					'Calendar Bridge: ignoring attempt to set non-allowlisted preference "' . $key . '" via /config',
+					['app' => Application::APP_ID],
+				);
+				continue;
+			}
 			$this->config->setUserValue($this->userId, Application::APP_ID, $key, $value);
 		}
 		$result = [];
