@@ -164,7 +164,6 @@
   </file>
   <file src="lib/Service/OutboundRecurrenceService.php">
     <MissingDependency>
-      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[private]]></code>
     </MissingDependency>
     <UndefinedClass>
@@ -172,11 +171,18 @@
       <code><![CDATA[$master->RRULE]]></code>
       <code><![CDATA[?VEvent]]></code>
       <code><![CDATA[Reader]]></code>
+      <code><![CDATA[Reader]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
     </UndefinedClass>
+    <UndefinedDocblockClass>
+      <code><![CDATA[$master->UID]]></code>
+      <code><![CDATA[array{obj: array<string, mixed>, master: VEvent, row: ?EventMap}|string]]></code>
+    </UndefinedDocblockClass>
   </file>
   <file src="lib/Service/OutboundWriteService.php">
     <MissingDependency>

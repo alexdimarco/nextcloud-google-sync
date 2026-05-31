@@ -187,7 +187,7 @@ class OutboundWriteService {
 
 			// clearEmptied: this is a PATCH, where an omitted text field is
 			// preserved on Google — so send "" to propagate a user clearing it.
-			$body = $this->buildEventFields($vevent, $ncUri, true);
+			$body = self::buildEventFields($vevent, $ncUri, true);
 
 			$baselineEtag = $row->getBaselineEtag();
 			if ($baselineEtag === null || $baselineEtag === '') {
@@ -466,7 +466,7 @@ class OutboundWriteService {
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function buildEventFields(VEvent $vevent, string $ncUri, bool $clearEmptied = false): array {
+	public static function buildEventFields(VEvent $vevent, string $ncUri, bool $clearEmptied = false): array {
 		$body = [
 			'extendedProperties' => ['private' => ['ncOrigin' => $ncUri]],
 		];
@@ -501,7 +501,7 @@ class OutboundWriteService {
 	 * @return array<string, mixed>
 	 */
 	private function buildInsertBody(VEvent $vevent, string $ncUri, string $clientId): array {
-		$body = $this->buildEventFields($vevent, $ncUri);
+		$body = self::buildEventFields($vevent, $ncUri);
 		$body['id'] = $clientId;
 		return $body;
 	}
