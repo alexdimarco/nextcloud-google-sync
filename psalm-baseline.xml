@@ -170,8 +170,8 @@
       <code><![CDATA[$master->RDATE]]></code>
       <code><![CDATA[$master->RRULE]]></code>
       <code><![CDATA[?VEvent]]></code>
+      <code><![CDATA[?VEvent]]></code>
       <code><![CDATA[Reader]]></code>
-      <code><![CDATA[Reader]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
@@ -179,10 +179,13 @@
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[\Sabre\VObject\Property]]></code>
     </UndefinedClass>
     <UndefinedDocblockClass>
       <code><![CDATA[$master->UID]]></code>
       <code><![CDATA[array{obj: array<string, mixed>, master: VEvent, row: ?EventMap}|string]]></code>
+      <code><![CDATA[array{overrides: array<string, VEvent>, exdates: array<string, true>, times: list<DateTimeInterface>}]]></code>
     </UndefinedDocblockClass>
   </file>
   <file src="lib/Service/OutboundWriteService.php">

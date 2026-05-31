@@ -8,6 +8,8 @@ declare(strict_types=1);
  */
 namespace OCA\CalendarBridge\Service;
 
+use DateTimeImmutable;
+use DateTimeInterface;
 use DateTimeZone;
 use OCA\CalendarBridge\AppInfo\Application;
 use OCA\CalendarBridge\Db\EventMap;
@@ -110,7 +112,10 @@ class OutboundRecurrenceService {
 				'Calendar Bridge: created Google series ' . $masterId . ' from local ' . $ncUri,
 				['app' => Application::APP_ID],
 			);
-			$this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
+			$this->runInstanceDiff(
+				$userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata'],
+				isset($obj['lastmodified']) ? (int)$obj['lastmodified'] : null,
+			);
 			return OutboundWriteService::CREATED;
 		} catch (Throwable $e) {
 			$this->logger->warning(
@@ -167,7 +172,7 @@ class OutboundRecurrenceService {
 			}
 
 			// 2) per-instance overrides + EXDATE cancellations.
-			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
+			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata'], $ncLastMod);
 
 			// 3) authoritative master re-GET so inbound reads the whole series as ECHO.
 			$this->recordMasterEcho($userId, $calId, $ncCalId, $ncUri, $masterId, $master, $obj);
@@ -276,19 +281,360 @@ class OutboundRecurrenceService {
 
 	/**
 	 * Reconcile the per-instance overrides + EXDATE cancellations of a series
-	 * against the live Google instances. Implemented in the next slice; for now a
-	 * logged no-op that surfaces any instances left one-way. Returns a terminal
-	 * status (UPDATED while instance work is deferred).
+	 * against the LIVE Google instances (identity = canonical key on the live
+	 * originalStartTime; we never reconstruct a Google id from NC strings).
+	 *
+	 * Returns UPDATED on full success, DEFERRED_INSTANCE if some instance was not
+	 * materialized in the window (retried next tick), CONFLICT_PARKED if a
+	 * Google-side instance edit won LWW (left in place), or ERROR on a transient
+	 * failure (holds the token). NC object lastmodified is the single (coarse) NC
+	 * timestamp for every per-instance LWW.
 	 */
-	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData): string {
-		$pending = $this->countInstanceWork($calData);
-		if ($pending > 0) {
-			$this->logger->info(
-				'Calendar Bridge: series ' . $ncUri . ' has ' . $pending . ' instance override(s)/EXDATE(s) not yet pushed (one-way)',
-				['app' => Application::APP_ID],
-			);
+	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData, ?int $ncLastMod): string {
+		$intent = $this->buildNcIntent($calData);
+		if ($intent['overrides'] === [] && $intent['exdates'] === []) {
+			return OutboundWriteService::UPDATED; // nothing per-instance to do
 		}
+		[$timeMin, $timeMax] = $this->window($intent['times']);
+		$live = $this->listLiveInstances($userId, $calId, $masterId, $timeMin, $timeMax);
+		if ($live['error']) {
+			return OutboundWriteService::ERROR; // transient; hold + retry
+		}
+		$byKey = $live['byKey'];
+		$collisions = $live['collisions'];
+		// Our recorded per-instance baselines, keyed canonically — the echo-vs-edit
+		// discriminator: a live instance whose etag still matches our baseline is
+		// our own write (or a slot we just generated), NOT a concurrent change.
+		$siblingBaseline = [];
+		foreach ($this->eventMapService->findSiblings($ncCalId, $ncUri) as $row) {
+			$k = RecurrenceKey::fromGoogleToken($row->getRecurrenceId());
+			if ($k !== null) {
+				$siblingBaseline[$k] = $row->getBaselineEtag();
+			}
+		}
+
+		$deferred = false;
+		$parked = false;
+		foreach ([...array_keys($intent['exdates']), ...array_keys($intent['overrides'])] as $key) {
+			if (isset($collisions[$key])) {
+				$this->logger->warning(
+					'Calendar Bridge: series ' . $ncUri . ' instance ' . $key . ' is ambiguous (multiple live instances); skipping',
+					['app' => Application::APP_ID],
+				);
+				$parked = true;
+				continue;
+			}
+			$inst = $byKey[$key] ?? null;
+			if ($inst === null) {
+				// Not materialized in the window — retry on a later tick.
+				$deferred = true;
+				continue;
+			}
+			$rawToken = $this->rawOriginalStart($inst['ost']);
+			$base = $siblingBaseline[$key] ?? null;
+			$isExdate = isset($intent['exdates'][$key]);
+			$outcome = $isExdate
+				? $this->cancelInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken, $base, $ncLastMod)
+				: $this->overrideInstance($userId, $calId, $ncCalId, $ncUri, $inst, $intent['overrides'][$key], $rawToken, $base, $ncLastMod);
+			if ($outcome === OutboundWriteService::ERROR) {
+				return OutboundWriteService::ERROR;
+			}
+			if ($outcome === OutboundWriteService::CONFLICT_PARKED) {
+				$parked = true;
+			}
+		}
+		if ($deferred) {
+			return OutboundWriteService::DEFERRED_INSTANCE;
+		}
+		return $parked ? OutboundWriteService::CONFLICT_PARKED : OutboundWriteService::UPDATED;
+	}
+
+	/**
+	 * Ensure one occurrence is CANCELLED on Google (an NC EXDATE). Idempotent on
+	 * an already-cancelled instance or a 404/410. Per-instance LWW: if Google
+	 * edited the instance more recently, leave it (park). Records the sibling
+	 * 'cancelled' (kept, so a later EXDATE-removal can restore it).
+	 *
+	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 */
+	private function cancelInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken, ?string $siblingBaseline, ?int $ncLastMod): string {
+		if ($inst['status'] === 'cancelled') {
+			$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
+			return OutboundWriteService::UPDATED;
+		}
+		if (!$this->instanceNcWins($siblingBaseline, $inst['etag'], $inst['updated'], $ncLastMod)) {
+			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $inst['etag'], $inst['updated']);
+			return OutboundWriteService::CONFLICT_PARKED;
+		}
+		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'cancelled'], $inst['etag'], $siblingBaseline, $ncLastMod);
+		if ($out['parked']) {
+			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $out['etag'], $out['updated']);
+			return OutboundWriteService::CONFLICT_PARKED;
+		}
+		$res = $out['result'];
+		if (isset($res['error'])) {
+			$status = $res['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
+				return OutboundWriteService::UPDATED;
+			}
+			return $status === 412 ? OutboundWriteService::CONFLICT_PARKED : OutboundWriteService::ERROR;
+		}
+		$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
 		return OutboundWriteService::UPDATED;
+	}
+
+	/**
+	 * Ensure one occurrence carries the NC OVERRIDE's content on Google (a
+	 * RECURRENCE-ID VEVENT). PATCH (partial) preserves Google-side attendees;
+	 * status='confirmed' also restores a previously-cancelled slot.
+	 *
+	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 */
+	private function overrideInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, VEvent $ov, string $rawToken, ?string $siblingBaseline, ?int $ncLastMod): string {
+		if (!$this->instanceNcWins($siblingBaseline, $inst['etag'], $inst['updated'], $ncLastMod)) {
+			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $inst['etag'], $inst['updated']);
+			return OutboundWriteService::CONFLICT_PARKED;
+		}
+		$body = OutboundWriteService::buildEventFields($ov, $ncUri, true);
+		$body['status'] = 'confirmed';
+		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], $body, $inst['etag'], $siblingBaseline, $ncLastMod);
+		if ($out['parked']) {
+			$this->recordParkedSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], $out['etag'], $out['updated']);
+			return OutboundWriteService::CONFLICT_PARKED;
+		}
+		$res = $out['result'];
+		if (isset($res['error'])) {
+			$status = $res['statusCode'] ?? null;
+			if ($status === 404 || $status === 410) {
+				return OutboundWriteService::UPDATED; // instance vanished; nothing to override
+			}
+			return $status === 412 ? OutboundWriteService::CONFLICT_PARKED : OutboundWriteService::ERROR;
+		}
+		$this->eventMapService->recordOutboundSibling(
+			$ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'],
+			isset($res['updated']) ? (string)$res['updated'] : $out['updated'],
+			isset($res['etag']) ? (string)$res['etag'] : $out['etag'],
+		);
+		return OutboundWriteService::UPDATED;
+	}
+
+	/**
+	 * Patch an instance with If-Match; on a 412 — which a sibling instance's own
+	 * mutation routinely triggers, since all instances of a series share an etag
+	 * lineage — re-GET the live instance and retry once if NC still wins
+	 * (echo-vs-edit + LWW against the FRESH etag), else report parked. Returns the
+	 * final response, whether the instance is parked, and the fresh etag/updated.
+	 *
+	 * @param array<string, mixed> $body
+	 * @return array{result: array<string, mixed>, parked: bool, etag: ?string, updated: ?string}
+	 */
+	private function patchInstanceResilient(string $userId, string $calId, string $instanceId, array $body, ?string $etag, ?string $siblingBaseline, ?int $ncLastMod): array {
+		$res = $this->patchGoogleEvent($userId, $calId, $instanceId, $body, $etag);
+		if (!isset($res['error']) || ($res['statusCode'] ?? null) !== 412) {
+			return ['result' => $res, 'parked' => false, 'etag' => $etag, 'updated' => null];
+		}
+		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($instanceId));
+		if (isset($live['error']) || !isset($live['etag'])) {
+			return ['result' => $res, 'parked' => false, 'etag' => $etag, 'updated' => null];
+		}
+		$liveEtag = (string)$live['etag'];
+		$liveUpdated = isset($live['updated']) && is_string($live['updated']) ? $live['updated'] : null;
+		if (!$this->instanceNcWins($siblingBaseline, $liveEtag, $liveUpdated, $ncLastMod)) {
+			return ['result' => $live, 'parked' => true, 'etag' => $liveEtag, 'updated' => $liveUpdated];
+		}
+		$retry = $this->patchGoogleEvent($userId, $calId, $instanceId, $body, $liveEtag);
+		return ['result' => $retry, 'parked' => false, 'etag' => $liveEtag, 'updated' => $liveUpdated];
+	}
+
+	/**
+	 * Whether NC should win for this instance. Mirrors the master echo-vs-edit
+	 * rule: no recorded baseline, or the live etag still equals our baseline (our
+	 * own write / a slot we just generated) -> no concurrent Google change -> NC
+	 * writes. Only a live etag that DIFFERS from our baseline is a genuine
+	 * Google-side change, resolved by LWW.
+	 */
+	private function instanceNcWins(?string $siblingBaseline, ?string $liveEtag, ?string $liveUpdated, ?int $ncLastMod): bool {
+		if ($siblingBaseline === null || $siblingBaseline === '' || ($liveEtag !== null && $liveEtag === $siblingBaseline)) {
+			return true;
+		}
+		$googleUpdated = is_string($liveUpdated) ? strtotime($liveUpdated) : false;
+		return OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated) === 'nc_wins';
+	}
+
+	/** Record a sibling whose Google instance won LWW: baseline=live etag so it reads ECHO. */
+	private function recordParkedSibling(int $ncCalId, string $ncUri, string $rawToken, string $instanceId, ?string $etag, ?string $updated): void {
+		$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, $instanceId, $updated, $etag);
+	}
+
+	/**
+	 * List the live Google instances of a series in a window, keyed canonically
+	 * (showDeleted so cancelled instances are visible for idempotency + restore).
+	 * Detects >1 instance at one key (DST-fold) as a collision.
+	 *
+	 * @return array{byKey: array<string, array{instanceId:string, status:string, etag:?string, updated:?string, ost:array}>, collisions: array<string, true>, error: bool}
+	 */
+	private function listLiveInstances(string $userId, string $calId, string $masterId, ?string $timeMin, ?string $timeMax): array {
+		$byKey = [];
+		$collisions = [];
+		/** @var string $pageToken Google pagination cursor; '' once exhausted. */
+		$pageToken = '';
+		do {
+			$endpoint = 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($masterId)
+				. '/instances?showDeleted=true&maxResults=2500';
+			if ($timeMin !== null) {
+				$endpoint .= '&timeMin=' . urlencode($timeMin);
+			}
+			if ($timeMax !== null) {
+				$endpoint .= '&timeMax=' . urlencode($timeMax);
+			}
+			if ($pageToken !== '') {
+				$endpoint .= '&pageToken=' . urlencode($pageToken);
+			}
+			$resp = $this->googleApiService->request($userId, $endpoint);
+			if (isset($resp['error'])) {
+				return ['byKey' => $byKey, 'collisions' => $collisions, 'error' => true];
+			}
+			foreach (($resp['items'] ?? []) as $inst) {
+				if (!is_array($inst)) {
+					continue;
+				}
+				$key = RecurrenceKey::fromGoogleInstance($inst);
+				if ($key === null) {
+					continue;
+				}
+				if (isset($byKey[$key])) {
+					$collisions[$key] = true;
+					continue;
+				}
+				$byKey[$key] = [
+					'instanceId' => (string)($inst['id'] ?? ''),
+					'status' => (string)($inst['status'] ?? 'confirmed'),
+					'etag' => isset($inst['etag']) ? (string)$inst['etag'] : null,
+					'updated' => isset($inst['updated']) ? (string)$inst['updated'] : null,
+					'ost' => is_array($inst['originalStartTime'] ?? null) ? $inst['originalStartTime'] : [],
+				];
+			}
+			$pageToken = isset($resp['nextPageToken']) ? (string)$resp['nextPageToken'] : '';
+		} while ($pageToken !== '');
+		return ['byKey' => $byKey, 'collisions' => $collisions, 'error' => false];
+	}
+
+	/**
+	 * Parse the NC series for per-instance INTENT (content + which slots are
+	 * EXDATE'd), keyed canonically. EXDATE WINS over a co-located override.
+	 * 'times' collects every relevant instant (override RECURRENCE-IDs + override
+	 * DTSTARTs + EXDATE values) so the live-instance window covers moved overrides.
+	 *
+	 * @return array{overrides: array<string, VEvent>, exdates: array<string, true>, times: list<DateTimeInterface>}
+	 */
+	private function buildNcIntent(string $calData): array {
+		$overrides = [];
+		$exdates = [];
+		$times = [];
+		$resolver = [self::class, 'isResolvableTzid'];
+		try {
+			$vcal = Reader::read($calData);
+		} catch (Throwable) {
+			return ['overrides' => $overrides, 'exdates' => $exdates, 'times' => $times];
+		}
+		$master = self::parseMaster($calData);
+		$refZone = $this->masterRefZone($master);
+
+		foreach ($vcal->select('VEVENT') as $ev) {
+			if (!($ev instanceof VEvent) || !isset($ev->{'RECURRENCE-ID'})) {
+				continue;
+			}
+			$key = RecurrenceKey::fromIcsDateProp($ev->{'RECURRENCE-ID'}, $refZone, $resolver);
+			if ($key === null) {
+				continue;
+			}
+			$overrides[$key] = $ev;
+			foreach ($this->propDateTimes($ev->{'RECURRENCE-ID'}, $refZone) as $dt) {
+				$times[] = $dt;
+			}
+			if (isset($ev->DTSTART)) {
+				foreach ($this->propDateTimes($ev->DTSTART, $refZone) as $dt) {
+					$times[] = $dt;
+				}
+			}
+		}
+		if ($master !== null) {
+			foreach ($master->select('EXDATE') as $exProp) {
+				$keys = RecurrenceKey::fromIcsDateProps($exProp, $refZone, $resolver);
+				$dts = $this->propDateTimes($exProp, $refZone);
+				foreach ($keys as $i => $k) {
+					if ($k === null) {
+						continue;
+					}
+					$exdates[$k] = true;
+					if (isset($dts[$i])) {
+						$times[] = $dts[$i];
+					}
+				}
+			}
+		}
+		// EXDATE wins over a co-located override.
+		foreach (array_keys($exdates) as $k) {
+			unset($overrides[$k]);
+		}
+		return ['overrides' => $overrides, 'exdates' => $exdates, 'times' => $times];
+	}
+
+	/** The master's reference zone for floating values (DTSTART TZID, else UTC). */
+	private function masterRefZone(?VEvent $master): DateTimeZone {
+		$dtstart = $master?->DTSTART ?? null;
+		if ($dtstart !== null && isset($dtstart['TZID']) && self::isResolvableTzid((string)$dtstart['TZID'])) {
+			try {
+				return new DateTimeZone((string)$dtstart['TZID']);
+			} catch (Throwable) {
+				// fall through
+			}
+		}
+		return new DateTimeZone('UTC');
+	}
+
+	/** @return list<DateTimeInterface> */
+	private function propDateTimes(\Sabre\VObject\Property $p, DateTimeZone $refZone): array {
+		try {
+			return array_values($p->getDateTimes($refZone));
+		} catch (Throwable) {
+			return [];
+		}
+	}
+
+	/**
+	 * A generous [min-1d, max+1d] RFC3339 window over the relevant instants, so
+	 * the instances list covers both original slots and moved overrides. Null
+	 * bounds when there are no times (caller lists unbounded).
+	 *
+	 * @param list<DateTimeInterface> $times
+	 * @return array{0: ?string, 1: ?string}
+	 */
+	private function window(array $times): array {
+		if ($times === []) {
+			return [null, null];
+		}
+		$min = null;
+		$max = null;
+		foreach ($times as $dt) {
+			$ts = $dt->getTimestamp();
+			$min = ($min === null || $ts < $min) ? $ts : $min;
+			$max = ($max === null || $ts > $max) ? $ts : $max;
+		}
+		$fmt = static fn (int $ts): string => (new DateTimeImmutable('@' . $ts))->format(DateTimeInterface::RFC3339);
+		return [$fmt($min - 86400), $fmt($max + 86400)];
+	}
+
+	/** The raw originalStartTime string (matching the inbound recordFromImport token). */
+	private function rawOriginalStart(array $ost): string {
+		if (isset($ost['dateTime']) && is_string($ost['dateTime'])) {
+			return $ost['dateTime'];
+		}
+		if (isset($ost['date']) && is_string($ost['date'])) {
+			return $ost['date'];
+		}
+		return '';
 	}
 
 	/** @return array<string, mixed>|null the adopted live master, or null if it is not ours */
@@ -312,28 +658,6 @@ class OutboundRecurrenceService {
 	private function recordSeriesBaseline(int $ncCalId, string $ncUri, VEvent $master): void {
 		$shape = (isset($master->RRULE) || isset($master->RDATE)) ? 'recurring' : 'single';
 		$this->eventMapService->recordSeriesBaseline($ncCalId, $ncUri, $shape, self::extractRrule($master), $this->masterDtstartSignature($master));
-	}
-
-	/** The number of override VEVENTs + EXDATE values in the object (instance work). */
-	private static function countInstanceWork(string $calData): int {
-		try {
-			$vcal = Reader::read($calData);
-		} catch (Throwable) {
-			return 0;
-		}
-		$n = 0;
-		foreach ($vcal->select('VEVENT') as $ev) {
-			if ($ev instanceof VEvent && isset($ev->{'RECURRENCE-ID'})) {
-				$n++;
-			}
-		}
-		$master = self::parseMaster($calData);
-		if ($master !== null) {
-			foreach ($master->select('EXDATE') as $ex) {
-				$n += count($ex->getParts());
-			}
-		}
-		return $n;
 	}
 
 	/**
