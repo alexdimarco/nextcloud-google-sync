@@ -158,8 +158,36 @@
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[private]]></code>
     </MissingDependency>
+  </file>
+  <file src="lib/Service/OutboundRecurrenceService.php">
+    <MissingDependency>
+      <code><![CDATA[private]]></code>
+    </MissingDependency>
+    <UndefinedClass>
+      <code><![CDATA[$master->RDATE]]></code>
+      <code><![CDATA[$master->RDATE]]></code>
+      <code><![CDATA[$master->RRULE]]></code>
+      <code><![CDATA[$master->RRULE]]></code>
+      <code><![CDATA[?VEvent]]></code>
+      <code><![CDATA[?VEvent]]></code>
+      <code><![CDATA[Reader]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[VEvent]]></code>
+      <code><![CDATA[\Sabre\VObject\Property]]></code>
+    </UndefinedClass>
+    <UndefinedDocblockClass>
+      <code><![CDATA[$master->UID]]></code>
+      <code><![CDATA[array{obj: array<string, mixed>, master: VEvent, row: ?EventMap}|string]]></code>
+      <code><![CDATA[array{overrides: array<string, VEvent>, exdates: array<string, true>, times: list<DateTimeInterface>}]]></code>
+    </UndefinedDocblockClass>
   </file>
   <file src="lib/Service/OutboundWriteService.php">
     <MissingDependency>
@@ -174,6 +202,13 @@
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
+    </UndefinedClass>
+  </file>
+  <file src="lib/Service/RecurrenceKey.php">
+    <UndefinedClass>
+      <code><![CDATA[Property]]></code>
+      <code><![CDATA[Property]]></code>
+      <code><![CDATA[Property]]></code>
     </UndefinedClass>
   </file>
   <file src="lib/Settings/Admin.php">

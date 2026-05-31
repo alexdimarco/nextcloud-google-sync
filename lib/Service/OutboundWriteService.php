@@ -38,6 +38,12 @@ class OutboundWriteService {
 	public const SKIPPED_FOREIGN = 'skipped_foreign';
 	public const CONFLICT = 'conflict';
 	public const ERROR = 'error';
+	// Phase 4 (recurrence) terminal statuses. All ADVANCE the change token — only
+	// a genuine transient ERROR (or a flat-path CONFLICT) holds it — so one bad
+	// recurring series can never wedge the whole calendar's outbound sync.
+	public const SKIPPED_UNSUPPORTED = 'skipped_unsupported';
+	public const DEFERRED_INSTANCE = 'deferred_instance';
+	public const CONFLICT_PARKED = 'conflict_parked';
 
 	public function __construct(
 		private CalDavBackend $caldavBackend,
@@ -181,7 +187,7 @@ class OutboundWriteService {
 
 			// clearEmptied: this is a PATCH, where an omitted text field is
 			// preserved on Google — so send "" to propagate a user clearing it.
-			$body = $this->buildEventFields($vevent, $ncUri, true);
+			$body = self::buildEventFields($vevent, $ncUri, true);
 
 			$baselineEtag = $row->getBaselineEtag();
 			if ($baselineEtag === null || $baselineEtag === '') {
@@ -460,7 +466,7 @@ class OutboundWriteService {
 	 *
 	 * @return array<string, mixed>
 	 */
-	private function buildEventFields(VEvent $vevent, string $ncUri, bool $clearEmptied = false): array {
+	public static function buildEventFields(VEvent $vevent, string $ncUri, bool $clearEmptied = false): array {
 		$body = [
 			'extendedProperties' => ['private' => ['ncOrigin' => $ncUri]],
 		];
@@ -495,7 +501,7 @@ class OutboundWriteService {
 	 * @return array<string, mixed>
 	 */
 	private function buildInsertBody(VEvent $vevent, string $ncUri, string $clientId): array {
-		$body = $this->buildEventFields($vevent, $ncUri);
+		$body = self::buildEventFields($vevent, $ncUri);
 		$body['id'] = $clientId;
 		return $body;
 	}

@@ -49,6 +49,7 @@ class OutboundReconcileService {
 		private IConfig $config,
 		private LoggerInterface $logger,
 		private OutboundWriteService $writeService,
+		private OutboundRecurrenceService $recurrenceService,
 	) {
 	}
 
@@ -211,8 +212,12 @@ class OutboundReconcileService {
 					$cls = $this->classifyOne($ncCalId, $type, $uri);
 					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
 					if ($cls === self::LOCAL_NEW && $canWrite) {
-						// Phase 2b: create a Nextcloud-originated event in Google.
-						$status = $this->writeService->createLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
+						// Phase 2b/4: create a Nextcloud-originated event in Google —
+						// a recurring SERIES routes to the recurrence differ, a flat
+						// event to the single-event writer.
+						$status = $this->isRecurring($ncCalId, $uri)
+							? $this->recurrenceService->createLocalSeriesInGoogle($userId, $calId, $ncCalId, $uri)
+							: $this->writeService->createLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
 						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
@@ -221,11 +226,13 @@ class OutboundReconcileService {
 							['app' => Application::APP_ID],
 						);
 					} elseif ($cls === self::LOCAL_EDIT && $canWrite) {
-						// Phase 2c: push a Nextcloud-side edit to Google. Resolves
-						// to a terminal status (UPDATED/SKIPPED_*) or holds the
-						// token (ERROR/CONFLICT) for a retry; a missing baseline
-						// self-heals via the live-event LWW path, never a silent drop.
-						$status = $this->writeService->updateLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
+						// Phase 2c/4: push a Nextcloud-side edit to Google. A recurring
+						// series routes to the recurrence differ. Both resolve to a
+						// terminal status (UPDATED/SKIPPED_*) or hold the token
+						// (ERROR/CONFLICT) for a retry.
+						$status = $this->isRecurring($ncCalId, $uri)
+							? $this->recurrenceService->updateLocalSeriesInGoogle($userId, $calId, $ncCalId, $uri)
+							: $this->writeService->updateLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
 						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
@@ -317,5 +324,23 @@ class OutboundReconcileService {
 		}
 
 		return self::classifyChange($type, $mapRowExists, $mapNcEtag, $currentEtag);
+	}
+
+	/**
+	 * Whether the (non-deleted) NC object is a recurring series — routes a
+	 * create/edit to the recurrence differ vs the flat single-event writer.
+	 * Defensive: false on any read/parse failure (falls back to the flat path,
+	 * whose own isRecurring guard then skips it).
+	 */
+	private function isRecurring(int $ncCalId, string $uri): bool {
+		try {
+			$obj = $this->caldavBackend->getCalendarObject($ncCalId, $uri);
+			if (!is_array($obj) || !isset($obj['calendardata'])) {
+				return false;
+			}
+			return OutboundRecurrenceService::isRecurringCalData((string)$obj['calendardata']);
+		} catch (Throwable) {
+			return false;
+		}
 	}
 }
