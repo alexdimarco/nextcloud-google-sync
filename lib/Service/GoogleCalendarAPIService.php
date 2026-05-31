@@ -512,6 +512,11 @@ class GoogleCalendarAPIService {
 				isset($e['updated']) ? (string)$e['updated'] : null,
 				isset($e['etag']) ? (string)$e['etag'] : null,
 			);
+			// Phase 4: a recurring NC-owned series re-renders its overrides inline
+			// (generateEventData consumed $exceptions). Refresh the sibling baselines
+			// to the live exception etags so the same instances read as a pure echo
+			// next tick instead of looking like fresh Google-side drift.
+			$this->refreshSeriesSiblings($ncCalId, $ncOrigin, (string)$e['id'], $exceptions);
 			return 'applied';
 		} catch (Exception|Throwable $ex) {
 			$this->logger->warning(
@@ -519,6 +524,65 @@ class GoogleCalendarAPIService {
 				['app' => Application::APP_ID],
 			);
 			return 'error';
+		}
+	}
+
+	/**
+	 * Whether any live OVERRIDE of an NC-owned recurring series differs from our
+	 * recorded sibling baseline — a Google-side single-instance edit that the
+	 * master etag may not reflect. Used to flip a pure-echo master to a genuine
+	 * change so the series re-renders into NC. (Google-side cancellations are not
+	 * detected here; they propagate on the periodic full pull.)
+	 *
+	 * @param array<int, Event> $exceptions
+	 */
+	private function seriesHasGoogleDrift(int $ncCalId, string $ncOrigin, string $masterId, array $exceptions): bool {
+		$baselineByKey = [];
+		foreach ($this->eventMapService->findSiblings($ncCalId, $ncOrigin) as $row) {
+			$k = RecurrenceKey::fromGoogleToken($row->getRecurrenceId());
+			if ($k !== null) {
+				$baselineByKey[$k] = $row->getBaselineEtag();
+			}
+		}
+		foreach ($exceptions as $ex) {
+			if ((string)($ex['recurringEventId'] ?? '') !== $masterId || ($ex['status'] ?? '') === 'cancelled') {
+				continue;
+			}
+			$k = RecurrenceKey::fromGoogleInstance($ex);
+			if ($k === null) {
+				continue;
+			}
+			$base = $baselineByKey[$k] ?? null;
+			$exEtag = isset($ex['etag']) ? (string)$ex['etag'] : null;
+			if ($base === null || ($exEtag !== null && $exEtag !== $base)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * After applying a Google series into an NC-owned object, record each live
+	 * override's current etag as the sibling baseline (origin='nc'), so its echo
+	 * is recognised next tick.
+	 *
+	 * @param array<int, Event> $exceptions
+	 */
+	private function refreshSeriesSiblings(int $ncCalId, string $ncOrigin, string $masterId, array $exceptions): void {
+		foreach ($exceptions as $ex) {
+			if ((string)($ex['recurringEventId'] ?? '') !== $masterId || ($ex['status'] ?? '') === 'cancelled') {
+				continue;
+			}
+			$token = EventMapService::recurrenceIdToken($ex);
+			$exId = (string)($ex['id'] ?? '');
+			if ($token === '' || $exId === '') {
+				continue;
+			}
+			$this->eventMapService->recordOutboundSibling(
+				$ncCalId, $ncOrigin, $token, $exId,
+				isset($ex['updated']) ? (string)$ex['updated'] : null,
+				isset($ex['etag']) ? (string)$ex['etag'] : null,
+			);
 		}
 	}
 
@@ -693,10 +757,13 @@ class GoogleCalendarAPIService {
 		// forces the next pull to be FULL so Google re-delivers the (otherwise
 		// unchanged) event and we retry — an incremental pull would not.
 		$forceFullPullNext = false;
+		/** @var array<string, true> master google-ids seen in $events this pull */
+		$seenMasterIds = [];
 
 		/** @var Event $e */
 		foreach ($events as $e) {
 			$objectUri = $e['id'];
+			$seenMasterIds[$objectUri] = true;
 
 			// Bidirectional-sync echo indirection: an event WE wrote to Google
 			// (Phase 2b) carries extendedProperties.private.ncOrigin = the NC
@@ -732,6 +799,12 @@ class GoogleCalendarAPIService {
 					$baseline = $row?->getBaselineEtag();
 					$incomingEtag = isset($e['etag']) ? (string)$e['etag'] : null;
 					$pureEcho = $baseline !== null && $incomingEtag !== null && $incomingEtag === $baseline;
+					// Phase 4: a Google-side edit to a single OCCURRENCE often leaves
+					// the master etag unchanged, so a "pure echo" master can still hide
+					// a drifted override — re-render the series in that case too.
+					if ($pureEcho && $this->seriesHasGoogleDrift($ncCalId, $ncOrigin, $objectUri, $exceptions)) {
+						$pureEcho = false;
+					}
 					if ($pureEcho) {
 						$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
 					} else {
@@ -881,6 +954,31 @@ class GoogleCalendarAPIService {
 					}
 				} catch (Exception|Throwable $ex) {
 					$this->logger->warning('Error when creating calendar event "' . '<redacted>' . '" ' . $ex->getMessage(), ['app' => Application::APP_ID]);
+				}
+			}
+		}
+
+		// Phase 4: on an INCREMENTAL pull a Google-side single-occurrence edit
+		// arrives as an exception WITHOUT its master, so the ncOrigin gate above
+		// never sees the series. If such an orphan exception belongs to an NC-owned
+		// series and genuinely drifted, force a FULL pull so the master re-renders
+		// the override inline next tick (where the sibling-aware gate applies it).
+		if ($isIncremental && !$forceFullPullNext) {
+			$checkedMasters = [];
+			foreach ($exceptions as $ex) {
+				$rid = (string)($ex['recurringEventId'] ?? '');
+				if ($rid === '' || isset($seenMasterIds[$rid]) || isset($checkedMasters[$rid])) {
+					continue;
+				}
+				$checkedMasters[$rid] = true;
+				$masterRow = $this->eventMapService->findNcOriginMasterByGoogleId($ncCalId, $rid);
+				if ($masterRow !== null && $this->seriesHasGoogleDrift($ncCalId, $masterRow->getNcUri(), $rid, $exceptions)) {
+					$forceFullPullNext = true;
+					$this->logger->info(
+						'Calendar Bridge: Google-side instance edit on NC-owned series ' . $masterRow->getNcUri() . '; forcing a full pull to apply it',
+						['app' => Application::APP_ID],
+					);
+					break;
 				}
 			}
 		}

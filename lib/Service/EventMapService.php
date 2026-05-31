@@ -224,6 +224,20 @@ class EventMapService {
 	}
 
 	/**
+	 * The NC-ORIGIN master row whose google_id is $googleId (a series master we
+	 * pushed), or null. Used by inbound to recognise an orphan exception (a
+	 * Google-side single-instance edit arriving without its master).
+	 */
+	public function findNcOriginMasterByGoogleId(int $ncCalId, string $googleId): ?EventMap {
+		try {
+			$row = $this->mapper->findByGoogleId($ncCalId, $googleId);
+			return ($row->getOrigin() === 'nc' && $row->getRecurrenceId() === '') ? $row : null;
+		} catch (Throwable) {
+			return null;
+		}
+	}
+
+	/**
 	 * The recurrence-instance sibling rows of one NC object (origin-agnostic),
 	 * or [] on error. recurrence_id is the RAW Google originalStartTime token;
 	 * canonical matching is the caller's job (via RecurrenceKey::fromGoogleToken).
