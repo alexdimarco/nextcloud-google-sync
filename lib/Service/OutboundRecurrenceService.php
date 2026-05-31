@@ -122,9 +122,10 @@ class OutboundRecurrenceService {
 	}
 
 	/**
-	 * Push a change to an existing NC recurring series (the differ). Master PATCH
-	 * + per-instance reconcile land in the next slice; for now, guards run and the
-	 * safe path is a logged no-op (one-way).
+	 * Push a change to an existing NC recurring series (the differ): master PATCH
+	 * (RRULE-only recurrence) with per-resource LWW on a 412, then the
+	 * per-instance overrides/EXDATE reconcile, then an authoritative master
+	 * re-GET so the whole series reads ECHO next tick.
 	 */
 	public function updateLocalSeriesInGoogle(string $userId, string $calId, int $ncCalId, string $ncUri): string {
 		try {
@@ -132,11 +133,49 @@ class OutboundRecurrenceService {
 			if (is_string($g)) {
 				return $g;
 			}
+			$master = $g['master'];
+			$obj = $g['obj'];
+			$row = $g['row'];
+			$masterId = $row?->getGoogleId();
+			if ($row === null || $masterId === null || $masterId === '') {
+				return OutboundWriteService::SKIPPED_GONE;
+			}
+			$ncLastMod = isset($obj['lastmodified']) ? (int)$obj['lastmodified'] : null;
+
+			// 1) MASTER PATCH (recurrence[] = RRULE only).
+			$body = $this->buildMasterBody($master, $ncUri);
+			$result = $this->patchGoogleEvent($userId, $calId, $masterId, $body, $row->getBaselineEtag());
+			if (isset($result['error'])) {
+				$status = $result['statusCode'] ?? null;
+				if ($status === 404 || $status === 410) {
+					$this->eventMapService->removeForNcUri($ncCalId, $ncUri);
+					return OutboundWriteService::SKIPPED_GONE;
+				}
+				if ($status === 412) {
+					$masterStatus = $this->resolveMasterConflict($userId, $calId, $ncCalId, $ncUri, $masterId, $body, $ncLastMod);
+					if ($masterStatus !== null) {
+						return $masterStatus; // CONFLICT_PARKED (Google won) — stop, no instance churn
+					}
+					// NC won + re-patched: fall through to the instance diff.
+				} else {
+					$this->logger->warning(
+						'Calendar Bridge: series master PATCH failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . ')',
+						['app' => Application::APP_ID],
+					);
+					return OutboundWriteService::ERROR;
+				}
+			}
+
+			// 2) per-instance overrides + EXDATE cancellations.
+			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
+
+			// 3) authoritative master re-GET so inbound reads the whole series as ECHO.
+			$this->recordMasterEcho($userId, $calId, $ncCalId, $ncUri, $masterId, $master, $obj);
 			$this->logger->info(
-				'Calendar Bridge: recurring update ' . $ncUri . ' passed guards (differ not yet implemented; one-way)',
+				'Calendar Bridge: updated Google series ' . $masterId . ' from local ' . $ncUri . ' (' . $diffStatus . ')',
 				['app' => Application::APP_ID],
 			);
-			return OutboundWriteService::SKIPPED_UNSUPPORTED;
+			return $diffStatus;
 		} catch (Throwable $e) {
 			$this->logger->warning(
 				'Calendar Bridge: recurring update threw for ' . $ncUri . ': ' . $e->getMessage(),
@@ -144,6 +183,67 @@ class OutboundRecurrenceService {
 			);
 			return OutboundWriteService::ERROR;
 		}
+	}
+
+	/**
+	 * events.patch via POST + X-HTTP-Method-Override (NC's IClient has no patch())
+	 * with If-Match + sendUpdates=none.
+	 *
+	 * @param array<string, mixed> $body
+	 * @return array<string, mixed>
+	 */
+	private function patchGoogleEvent(string $userId, string $calId, string $eventId, array $body, ?string $ifMatchEtag): array {
+		$headers = ['X-HTTP-Method-Override' => 'PATCH'];
+		if ($ifMatchEtag !== null && $ifMatchEtag !== '') {
+			$headers['If-Match'] = $ifMatchEtag;
+		}
+		return $this->googleApiService->request(
+			$userId,
+			'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($eventId) . '?sendUpdates=none',
+			$body, 'POST', null, $headers,
+		);
+	}
+
+	/**
+	 * Resolve a 412 on the master PATCH by last-writer-wins against the live
+	 * master. Returns null when NC wins and the re-PATCH succeeded (caller
+	 * continues), or a terminal status (CONFLICT_PARKED / ERROR) to return.
+	 *
+	 * @param array<string, mixed> $body
+	 */
+	private function resolveMasterConflict(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, array $body, ?int $ncLastMod): ?string {
+		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($masterId));
+		if (isset($live['error']) || !isset($live['etag'])) {
+			return OutboundWriteService::ERROR; // transient; hold + retry
+		}
+		$googleUpdated = isset($live['updated']) && is_string($live['updated']) ? strtotime($live['updated']) : false;
+		if (OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated) !== 'nc_wins') {
+			// Google wins: record its etag as our baseline so the series reads
+			// ECHO and STOPS retrying; do NOT hold the calendar token.
+			$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, null, isset($live['updated']) ? (string)$live['updated'] : null, (string)$live['etag']);
+			$this->logger->info(
+				'Calendar Bridge: series master conflict on ' . $ncUri . ' resolved Google-wins (LWW); inbound will reconcile',
+				['app' => Application::APP_ID],
+			);
+			return OutboundWriteService::CONFLICT_PARKED;
+		}
+		$retry = $this->patchGoogleEvent($userId, $calId, $masterId, $body, (string)$live['etag']);
+		if (isset($retry['error'])) {
+			return OutboundWriteService::ERROR;
+		}
+		return null; // NC won, re-patched
+	}
+
+	/** Authoritative master re-GET; record nc_etag=current NC etag + fresh google baseline. */
+	private function recordMasterEcho(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, VEvent $master, array $obj): void {
+		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($masterId));
+		$this->eventMapService->recordOutboundUpdate(
+			$ncCalId, $ncUri,
+			isset($obj['etag']) ? (string)$obj['etag'] : null,
+			isset($live['updated']) && is_string($live['updated']) ? (string)$live['updated'] : null,
+			isset($live['etag']) && is_string($live['etag']) ? (string)$live['etag'] : null,
+		);
+		$this->recordSeriesBaseline($ncCalId, $ncUri, $master);
 	}
 
 	/**
@@ -177,9 +277,10 @@ class OutboundRecurrenceService {
 	/**
 	 * Reconcile the per-instance overrides + EXDATE cancellations of a series
 	 * against the live Google instances. Implemented in the next slice; for now a
-	 * logged no-op that surfaces any instances left one-way.
+	 * logged no-op that surfaces any instances left one-way. Returns a terminal
+	 * status (UPDATED while instance work is deferred).
 	 */
-	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData): void {
+	private function runInstanceDiff(string $userId, string $calId, int $ncCalId, string $ncUri, string $masterId, string $calData): string {
 		$pending = $this->countInstanceWork($calData);
 		if ($pending > 0) {
 			$this->logger->info(
@@ -187,6 +288,7 @@ class OutboundRecurrenceService {
 				['app' => Application::APP_ID],
 			);
 		}
+		return OutboundWriteService::UPDATED;
 	}
 
 	/** @return array<string, mixed>|null the adopted live master, or null if it is not ours */
