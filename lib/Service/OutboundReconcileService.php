@@ -221,9 +221,10 @@ class OutboundReconcileService {
 							['app' => Application::APP_ID],
 						);
 					} elseif ($cls === self::LOCAL_EDIT && $canWrite) {
-						// Phase 2c: push a Nextcloud-side edit to Google. (An
-						// INDETERMINATE edit — null baseline — is NOT this branch;
-						// it falls through to log-only and must not hold the token.)
+						// Phase 2c: push a Nextcloud-side edit to Google. Resolves
+						// to a terminal status (UPDATED/SKIPPED_*) or holds the
+						// token (ERROR/CONFLICT) for a retry; a missing baseline
+						// self-heals via the live-event LWW path, never a silent drop.
 						$status = $this->writeService->updateLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
 						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;

@@ -34,7 +34,6 @@ class OutboundWriteService {
 	public const DUPLICATE_ADOPTED = 'duplicate_adopted';
 	public const SKIPPED_RECURRING = 'skipped_recurring';
 	public const SKIPPED_GONE = 'skipped_gone';
-	public const SKIPPED_INDETERMINATE = 'skipped_indeterminate';
 	public const CONFLICT = 'conflict';
 	public const ERROR = 'error';
 
@@ -166,16 +165,6 @@ class OutboundWriteService {
 			if ($row === null || $googleId === null || $googleId === '') {
 				return self::SKIPPED_GONE;
 			}
-			$baselineEtag = $row->getBaselineEtag();
-			if ($baselineEtag === null || $baselineEtag === '') {
-				// No If-Match baseline -> a write would be a blind clobber of any
-				// concurrent Google change. Refuse; an inbound sync backfills it.
-				$this->logger->info(
-					'Calendar Bridge: skipping outbound update of ' . $ncUri . ' (no etag baseline yet)',
-					['app' => Application::APP_ID],
-				);
-				return self::SKIPPED_INDETERMINATE;
-			}
 			$obj = $this->caldavBackend->getCalendarObject($ncCalId, $ncUri);
 			if (!is_array($obj) || !isset($obj['calendardata'])) {
 				return self::SKIPPED_GONE;
@@ -188,7 +177,19 @@ class OutboundWriteService {
 				return self::SKIPPED_RECURRING;
 			}
 
-			$body = $this->buildEventFields($vevent, $ncUri);
+			// clearEmptied: this is a PATCH, where an omitted text field is
+			// preserved on Google — so send "" to propagate a user clearing it.
+			$body = $this->buildEventFields($vevent, $ncUri, true);
+
+			$baselineEtag = $row->getBaselineEtag();
+			if ($baselineEtag === null || $baselineEtag === '') {
+				// No If-Match baseline (a seeded/legacy row, or a crash between
+				// insert and record). A blind patch would clobber any concurrent
+				// Google change. Instead resolve against the LIVE event with the
+				// same LWW machinery a 412 uses: re-patch only if NC wins, else
+				// abandon and let inbound reconcile Google's version.
+				return $this->resolveUpdateConflict($userId, $calId, $ncCalId, $ncUri, $googleId, $obj, $body);
+			}
 			$result = $this->patchGoogleEvent($userId, $calId, $googleId, $body, $baselineEtag);
 
 			if (isset($result['error'])) {
@@ -243,9 +244,10 @@ class OutboundWriteService {
 	}
 
 	/**
-	 * Resolve a 412 on update. Re-GET the live Google event for its true current
-	 * 'updated' + etag (our stored google_updated is stale — it predates the
-	 * concurrent Google change). Apply last-writer-wins: NC newer (or tie) ->
+	 * Resolve an update against the LIVE Google event when we can't trust our
+	 * stored baseline — either a 412 (a concurrent Google change moved the etag)
+	 * or a missing baseline (a seeded/legacy row). Re-GET the event for its true
+	 * current 'updated' + etag and apply last-writer-wins: NC newer (or tie) ->
 	 * single re-patch with the fresh etag; Google newer (or any ambiguity) ->
 	 * abandon and let inbound re-pull Google's version. Never blind-clobbers.
 	 *
@@ -256,7 +258,7 @@ class OutboundWriteService {
 		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($googleId));
 		if (isset($live['error']) || !isset($live['etag'])) {
 			$this->logger->warning(
-				'Calendar Bridge: 412 on update of ' . $ncUri . ' and could not re-read the live event; abandoning (will retry)',
+				'Calendar Bridge: update conflict on ' . $ncUri . ' and could not re-read the live event; abandoning (will retry)',
 				['app' => Application::APP_ID],
 			);
 			return self::CONFLICT;
@@ -266,7 +268,7 @@ class OutboundWriteService {
 		$winner = self::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated);
 		if ($winner !== 'nc_wins') {
 			$this->logger->info(
-				'Calendar Bridge: 412 conflict on ' . $ncUri . ' resolved Google-wins (LWW); abandoning outbound, inbound will reconcile',
+				'Calendar Bridge: update conflict on ' . $ncUri . ' resolved Google-wins (LWW); abandoning outbound, inbound will reconcile',
 				['app' => Application::APP_ID],
 			);
 			return self::CONFLICT;
@@ -275,14 +277,14 @@ class OutboundWriteService {
 		$retry = $this->patchGoogleEvent($userId, $calId, $googleId, $body, (string)$live['etag']);
 		if (isset($retry['error'])) {
 			$this->logger->warning(
-				'Calendar Bridge: 412 conflict on ' . $ncUri . ' NC-wins re-patch failed (tight race); will retry next tick',
+				'Calendar Bridge: update conflict on ' . $ncUri . ' NC-wins re-patch failed (tight race); will retry next tick',
 				['app' => Application::APP_ID],
 			);
 			return self::CONFLICT;
 		}
 		$this->recordUpdateResult($ncCalId, $ncUri, $obj, $retry);
 		$this->logger->info(
-			'Calendar Bridge: 412 conflict on ' . $ncUri . ' resolved NC-wins (LWW); re-patched',
+			'Calendar Bridge: update conflict on ' . $ncUri . ' resolved NC-wins (LWW); re-patched',
 			['app' => Application::APP_ID],
 		);
 		return self::UPDATED;
@@ -322,15 +324,23 @@ class OutboundWriteService {
 	 * fields present here, omitting attendees on an UPDATE LEAVES any Google-
 	 * side attendees/reminders untouched rather than wiping them.
 	 *
+	 * $clearEmptied governs the three optional text fields: on INSERT (false) an
+	 * absent/empty field is omitted (harmless). On a PATCH (true) it is sent as
+	 * "" — on a Google patch an OMITTED field is preserved, so to propagate a
+	 * user CLEARING summary/description/location we must send the empty string.
+	 *
 	 * @return array<string, mixed>
 	 */
-	private function buildEventFields(VEvent $vevent, string $ncUri): array {
+	private function buildEventFields(VEvent $vevent, string $ncUri, bool $clearEmptied = false): array {
 		$body = [
 			'extendedProperties' => ['private' => ['ncOrigin' => $ncUri]],
 		];
 		foreach (['summary' => 'SUMMARY', 'description' => 'DESCRIPTION', 'location' => 'LOCATION'] as $key => $prop) {
-			if (isset($vevent->{$prop}) && (string)$vevent->{$prop} !== '') {
-				$body[$key] = (string)$vevent->{$prop};
+			$value = (isset($vevent->{$prop}) && (string)$vevent->{$prop} !== '') ? (string)$vevent->{$prop} : '';
+			if ($value !== '') {
+				$body[$key] = $value;
+			} elseif ($clearEmptied) {
+				$body[$key] = '';
 			}
 		}
 		$dtstart = $vevent->DTSTART;

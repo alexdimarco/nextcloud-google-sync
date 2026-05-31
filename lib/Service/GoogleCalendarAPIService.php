@@ -445,6 +445,58 @@ class GoogleCalendarAPIService {
 	}
 
 	/**
+	 * Apply a genuine Google-side change to an NC-OWNED event (one we pushed,
+	 * carrying ncOrigin) back into its Nextcloud object — the inbound half of
+	 * bidirectional LWW when Google wins. Writes to URI=$ncOrigin (NOT the
+	 * google id) and PRESERVES the NC object's original UID, since
+	 * generateEventData would otherwise stamp the Google-derived UID and change
+	 * the event's identity for CalDAV clients. Records the new baseline so the
+	 * outbound reconcile classifies the write as an ECHO. Never throws.
+	 *
+	 * @param Event $e
+	 * @param array<int, Event> $exceptions
+	 * @param array<string, array{background?: string}> $eventColors
+	 */
+	private function applyRemoteToNcOrigin(array $e, array $exceptions, int $ncCalId, string $ncOrigin, array $eventColors, string $originalCalData): bool {
+		try {
+			$eventData = $this->generateEventData($e, $exceptions, $ncCalId, $eventColors);
+			if ($eventData === '') {
+				return false;
+			}
+			// Preserve the NC object's original UID.
+			if (preg_match('/^UID:(.+)$/m', $originalCalData, $m)) {
+				$origUid = trim($m[1]);
+				$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData, 1);
+			}
+			$vtimezones = '';
+			foreach ($this->extractTzids($eventData) as $tzid) {
+				$vtimezones .= $this->buildVTimezoneBlock($tzid);
+			}
+			$calData = 'BEGIN:VCALENDAR' . "\n"
+				. 'VERSION:2.0' . "\n"
+				. 'PRODID:NextCloud Calendar' . "\n"
+				. $vtimezones
+				. $eventData
+				. 'END:VCALENDAR';
+			$ncEtag = $this->caldavBackend->updateCalendarObject($ncCalId, $ncOrigin, $calData);
+			// nc_etag = our write's etag (so the reconcile reads ECHO, not edit);
+			// baseline = Google's etag we just applied; google_updated likewise.
+			$this->eventMapService->recordOutboundUpdate(
+				$ncCalId, $ncOrigin, $ncEtag,
+				isset($e['updated']) ? (string)$e['updated'] : null,
+				isset($e['etag']) ? (string)$e['etag'] : null,
+			);
+			return true;
+		} catch (Exception|Throwable $ex) {
+			$this->logger->warning(
+				'Calendar Bridge: failed to pull Google change into NC-owned event ' . $ncOrigin . ': ' . $ex->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return false;
+		}
+	}
+
+	/**
 	 * get the most recent event update date in a calendar
 	 *
 	 * @param int $calendarId
@@ -618,17 +670,57 @@ class GoogleCalendarAPIService {
 
 			// Bidirectional-sync echo indirection: an event WE wrote to Google
 			// (Phase 2b) carries extendedProperties.private.ncOrigin = the NC
-			// object URI. When it echoes back here, bind its google_id onto the
-			// existing NC-origin map row and skip — never mint a duplicate NC
-			// object under URI=$e['id']. Crucially, also drop $ncOrigin from
-			// $unseenURIs: the real object lives under URI=$ncOrigin (not the
-			// google id), so without this the full-pull deletion sweep would
-			// delete the user's own event.
+			// object URI. When it echoes back here we must never mint a duplicate
+			// NC object under URI=$e['id']; we also drop $ncOrigin from
+			// $unseenURIs (the real object lives under URI=$ncOrigin, not the
+			// google id, so without this the full-pull deletion sweep would
+			// delete the user's own event).
 			$ncOrigin = $e['extendedProperties']['private']['ncOrigin'] ?? null;
 			if ($ncOrigin !== null && $ncOrigin !== '') {
 				$original = $this->caldavBackend->getCalendarObject($ncCalId, $ncOrigin);
 				if ($original !== null) {
-					$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $e['etag'] ?? null);
+					// Distinguish a pure echo from a genuine Google-side change by
+					// comparing the incoming etag to the baseline we recorded:
+					//  - etag == baseline: nothing changed since our last write — a
+					//    true echo. Bind google_id and skip.
+					//  - etag != baseline (or no baseline): Google's copy moved.
+					//    Resolve NC vs Google with the SAME pure last-writer-wins
+					//    rule the outbound path uses (so the two paths can never
+					//    disagree and wedge):
+					//      * Google wins: pull Google's version into the NC object
+					//        now (UID preserved) so the reconcile later this tick
+					//        sees an ECHO and never re-pushes.
+					//      * NC wins: refresh the baseline to Google's current etag
+					//        so the reconcile's outbound patch applies cleanly (NC
+					//        overwrites Google's older edit).
+					$row = $this->eventMapService->getMasterRow($ncCalId, $ncOrigin);
+					$baseline = $row?->getBaselineEtag();
+					$incomingEtag = isset($e['etag']) ? (string)$e['etag'] : null;
+					$pureEcho = $baseline !== null && $incomingEtag !== null && $incomingEtag === $baseline;
+					if ($pureEcho) {
+						$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+					} else {
+						$ncLastMod = isset($original['lastmodified']) ? (int)$original['lastmodified'] : null;
+						$googleUpdated = isset($e['updated']) ? strtotime((string)$e['updated']) : false;
+						$winner = OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated);
+						if ($winner === 'google_wins') {
+							if ($this->applyRemoteToNcOrigin($e, $exceptions, $ncCalId, $ncOrigin, $eventColors, (string)$original['calendardata'])) {
+								$nbUpdated++;
+								$this->logger->info(
+									'Calendar Bridge: pulled Google-side change into NC-owned event ' . $ncOrigin . ' (LWW: google wins)',
+									['app' => Application::APP_ID],
+								);
+							} else {
+								// Apply failed: keep google_id bound but leave the
+								// baseline STALE so we retry next tick. The outbound
+								// patch will 412 -> google-wins -> abandon, so the
+								// stale baseline can never cause a clobber meanwhile.
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, null, null);
+							}
+						} else {
+							$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+						}
+					}
 					if ($unseenURIs->contains($ncOrigin)) {
 						$unseenURIs->remove($ncOrigin);
 					}
