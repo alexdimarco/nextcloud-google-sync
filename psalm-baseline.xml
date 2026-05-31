@@ -176,6 +176,13 @@
       <code><![CDATA[VEvent]]></code>
     </UndefinedClass>
   </file>
+  <file src="lib/Service/RecurrenceKey.php">
+    <UndefinedClass>
+      <code><![CDATA[Property]]></code>
+      <code><![CDATA[Property]]></code>
+      <code><![CDATA[Property]]></code>
+    </UndefinedClass>
+  </file>
   <file src="lib/Settings/Admin.php">
     <MissingOverrideAttribute>
       <code><![CDATA[public function getForm(): TemplateResponse {]]></code>
