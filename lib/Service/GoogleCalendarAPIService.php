@@ -54,6 +54,7 @@ class GoogleCalendarAPIService {
 		private IConfig $config,
 		private EventMapService $eventMapService,
 		private OutboundReconcileService $outboundReconcileService,
+		private MapVerifyService $mapVerifyService,
 	) {
 		$this->utcTimezone = new DateTimeZone('-0000');
 	}
@@ -1061,6 +1062,15 @@ class GoogleCalendarAPIService {
 		// two-way. Self-gated (default off), logs only, writes nothing to
 		// Google, and is internally defensive — cannot affect the import.
 		$this->outboundReconcileService->reconcile($userId, $calId, $ncCalId);
+
+		// Operational hardening: a periodic, conservative "trust-but-verify" pass
+		// over the event map vs both live sides (cadence-gated to once per ~6h per
+		// two-way calendar). Read + map-only, internally defensive — cannot write
+		// to Google or NC and cannot affect the import.
+		$this->mapVerifyService->verify(
+			$userId, $calId, $ncCalId,
+			$this->outboundReconcileService->isTwoWayEnabled($userId, $calId),
+		);
 
 		return [
 			'nbAdded' => $nbAdded,

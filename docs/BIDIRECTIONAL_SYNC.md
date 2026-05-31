@@ -182,9 +182,19 @@ closed or it could push wrongly:
    importer (which self-heals every full pull), the reconciler trusts its own
    history; a crash mid-tick or an out-of-band edit can turn a real foreign
    edit into a skipped echo (silent data loss) or an echo into a perceived
-   foreign change (ping-pong). Mitigation: a periodic trust-but-verify full
-   reconcile that rebuilds the map from both live sides, and re-baselining
-   strictly inside the write's lock.
+   foreign change (ping-pong). **MITIGATION IMPLEMENTED — `MapVerifyService`**: a
+   periodic (≤ once/6h per two-way calendar, under the import flock)
+   trust-but-verify pass that re-derives the map from BOTH live sides
+   (`events.list` + `getCalendarObjects`). It is READ + MAP-ONLY (never writes
+   Google/CalDAV), repairs only the two provably loss-proof drifts (drop a
+   both-sides-gone row; rebind a dangling `google_id` to the live event still
+   carrying our `ncOrigin` tag), and LOGS everything else (stale baseline,
+   indeterminate `nc_etag`, foreign tag, ambiguity) to `nextcloud.log` + the row's
+   `last_error`. A truncated (>50-page) or failed Google list is treated as
+   incomplete and skips the pass (no acting on partial ground truth). It does NOT
+   recover token-gap losses (unrecoverable by design) but makes them visible. The
+   pure decision table (`classifyRowDrift`/`shouldVerify`) is unit-tested; the
+   non-destructive end-to-end behavior is lab-verified (`tests/manual/verify-pass.php`).
 2. **`ncOrigin` echo gate requires the inbound importer to read
    `extendedProperties`,** which it does not today. Phase 2 must add that
    fetch/read path; until then there is no durable echo gate.
