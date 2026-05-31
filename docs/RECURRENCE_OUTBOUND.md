@@ -234,9 +234,28 @@ via fault injection):
 - A transient instance-write failure RESUMES: lab-verified by injecting a 503 on
   one override patch — the token is held, nc_etag is left pre-edit, and the next
   reconcile re-runs and converges (the override lands).
-- BUDGET OVERFLOW (a series with more than INSTANCE_OP_BUDGET=100 individually-
-  customized occurrences): lab-verified that the first N sync (and keep updating
-  on re-edit) and the token ADVANCES (no wedge), BUT the overflow beyond N stays
-  one-way — there is NO resume cursor, so each run re-processes the same first N.
-  A persisted resume cursor (the design's "advancing PARTIAL") is deferred; >100
-  single-series customizations is pathological. NOT "syncs on a later edit".
+- BUDGET OVERFLOW (a series needing more than instanceOpBudget()=100 Google
+  instance WRITES in one tick): lab-verified that the first N sync (and keep
+  updating on re-edit) and the token ADVANCES (no wedge), BUT the overflow beyond
+  N stays one-way — there is NO resume cursor, so each run re-processes the same
+  first N. A persisted resume cursor (the design's "advancing PARTIAL") is
+  deferred; >100 single-series WRITES is pathological. NOT "syncs on a later edit".
+
+Round-3 hardenings (cheap mitigations shipped instead of the cursor; both
+lab-verified in tests/manual/p4-budget-overflow.php):
+- WRITE-ONLY BUDGET COUNTING: only a real Google write counts toward the budget.
+  An already-cancelled EXDATE re-asserted on a later edit, or an already-confirmed
+  restore, short-circuits to a no-op (no API call) and is FREE. This neutralizes
+  the most plausible trigger — a long-lived series re-asserts its FULL accumulated
+  EXDATE set on every master edit, but those re-cancels cost zero budget, so they
+  can never starve a genuine new override/cancel. (An override has no cheap
+  idempotency check and always counts.)
+- COUNTED + ATTRIBUTED DEFERRAL LOG: the overflow warning now includes the userId
+  and a count of deferred occurrences (was a one-shot, count-less line), and the
+  not-yet-materialized-in-window deferral is logged distinctly (info) from the
+  budget breaker (warning). NOTE this fires at DEFERRAL TIME (once per series
+  edit), not every cron tick: a deferred series records nc_etag (ECHO) and the
+  reconciler only revisits CHANGED objects, so re-logging every tick would need
+  either re-processing (a Google-quota regression) or a persistent deferred-series
+  registry (the cursor work). The cursor remains the real fix if telemetry ever
+  shows a genuine >100-WRITE series.

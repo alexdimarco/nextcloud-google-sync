@@ -351,7 +351,11 @@ class OutboundRecurrenceService {
 		$deferred = false;
 		$parked = false;
 		$ops = 0;
-		foreach ([...array_keys($intent['exdates']), ...array_keys($intent['overrides']), ...array_keys($restoreKeys)] as $key) {
+		$budgetDeferred = 0;
+		$windowDeferred = 0;
+		$workKeys = [...array_keys($intent['exdates']), ...array_keys($intent['overrides']), ...array_keys($restoreKeys)];
+		$total = count($workKeys);
+		foreach ($workKeys as $i => $key) {
 			if (isset($collisions[$key])) {
 				$this->logger->warning(
 					'Calendar Bridge: series ' . $ncUri . ' instance ' . $key . ' is ambiguous (multiple live instances); skipping',
@@ -362,22 +366,26 @@ class OutboundRecurrenceService {
 			}
 			$inst = $byKey[$key] ?? null;
 			if ($inst === null) {
-				// Not materialized in the window — retry on a later tick.
+				// Not materialized in the Google window — a SEPARATE one-way
+				// deferral from the budget breaker (far-future / sparse
+				// customization); retried once Google materializes it / on a
+				// full pull. Counted and logged distinctly below.
+				$windowDeferred++;
 				$deferred = true;
 				continue;
 			}
-			// Per-tick circuit breaker: cap the per-series instance writes so a
+			// Per-tick circuit breaker: cap the per-series Google WRITES so a
 			// pathological series (hundreds of customized occurrences) cannot make
-			// unbounded API calls in one cron tick. DEFERRED advances the token (no
-			// wedge). LAB-VERIFIED LIMITATION: there is no resume cursor, so each run
-			// re-processes the SAME first N keys (stable order) — the first N
-			// customizations sync (and keep updating), but the OVERFLOW beyond N
-			// stays one-way (at the base expansion) until a resume cursor lands.
+			// unbounded API calls in one cron tick. Only REAL writes count toward
+			// the budget — an already-cancelled EXDATE / already-confirmed restore
+			// short-circuits to a no-op (see $outcome['wrote']), so re-asserting a
+			// long-accumulated EXDATE set is free and does not starve genuine edits.
+			// DEFERRED advances the token (no wedge). LAB-VERIFIED LIMITATION: there
+			// is no resume cursor, so each run re-processes the SAME first N writes
+			// (stable order) — the first N sync (and keep updating), but the OVERFLOW
+			// beyond N stays one-way (at the base expansion) until a cursor lands.
 			if ($ops >= $this->instanceOpBudget()) {
-				$this->logger->warning(
-					'Calendar Bridge: series ' . $ncUri . ' exceeded the per-tick instance-op budget (' . $this->instanceOpBudget() . '); remaining instances deferred',
-					['app' => Application::APP_ID],
-				);
+				$budgetDeferred = $total - $i; // remaining incl. this key — upper bound
 				$deferred = true;
 				break;
 			}
@@ -389,10 +397,33 @@ class OutboundRecurrenceService {
 			} else {
 				$outcome = $this->restoreInstance($userId, $calId, $ncCalId, $ncUri, $inst, $rawToken);
 			}
-			$ops++;
-			if ($outcome === OutboundWriteService::ERROR) {
+			if ($outcome['status'] === OutboundWriteService::ERROR) {
 				return OutboundWriteService::ERROR;
 			}
+			if ($outcome['wrote']) {
+				$ops++;
+			}
+		}
+		// Counted + attributed deferral signal (the gap was previously silent — a
+		// one-shot warning with no count). NOTE: this fires at deferral time (once
+		// per series edit), NOT every cron tick: a deferred series records nc_etag
+		// (ECHO) and the reconciler only revisits CHANGED objects, so re-logging
+		// every tick would require either re-processing (a Google-quota regression)
+		// or a persistent deferred-series registry (the resume-cursor work).
+		if ($budgetDeferred > 0) {
+			$this->logger->warning(
+				'Calendar Bridge: series ' . $ncUri . ' (user ' . $userId . ') hit the per-tick instance-write budget ('
+				. $this->instanceOpBudget() . '); ~' . $budgetDeferred . ' customized occurrence(s) deferred and remain '
+				. 'ONE-WAY until the series is re-synced (no resume cursor)',
+				['app' => Application::APP_ID],
+			);
+		}
+		if ($windowDeferred > 0) {
+			$this->logger->info(
+				'Calendar Bridge: series ' . $ncUri . ' (user ' . $userId . ') has ' . $windowDeferred
+				. ' customized occurrence(s) not yet materialized in the Google window; will retry on a later tick',
+				['app' => Application::APP_ID],
+			);
 		}
 		if ($deferred) {
 			return OutboundWriteService::DEFERRED_INSTANCE;
@@ -406,11 +437,13 @@ class OutboundRecurrenceService {
 	 * synced. Google then re-expands it from the master RRULE.
 	 *
 	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 * @return array{status: string, wrote: bool} wrote=false when the instance was
+	 *   already confirmed (a free no-op that must NOT consume the write budget).
 	 */
-	private function restoreInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): string {
+	private function restoreInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): array {
 		if ($inst['status'] !== 'cancelled') {
 			$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, $inst['instanceId'], is_string($inst['updated']) ? $inst['updated'] : null, is_string($inst['etag']) ? $inst['etag'] : null);
-			return OutboundWriteService::UPDATED;
+			return ['status' => OutboundWriteService::UPDATED, 'wrote' => false];
 		}
 		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'confirmed'], $inst['etag']);
 		$res = $out['result'];
@@ -420,16 +453,16 @@ class OutboundRecurrenceService {
 				// Gone on Google — can't restore. Clear the 'cancelled' marker
 				// (-> 'synced') so it is not re-selected for restore every tick.
 				$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'], null, null);
-				return OutboundWriteService::UPDATED;
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 			}
-			return OutboundWriteService::ERROR;
+			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}
 		$this->eventMapService->recordOutboundSibling(
 			$ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'],
 			isset($res['updated']) ? (string)$res['updated'] : $out['updated'],
 			isset($res['etag']) ? (string)$res['etag'] : $out['etag'],
 		);
-		return OutboundWriteService::UPDATED;
+		return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 	}
 
 	/** Parse a raw Google originalStartTime token into a DateTime (for the window). */
@@ -450,11 +483,14 @@ class OutboundRecurrenceService {
 	 * Records the sibling 'cancelled' (kept, so a later EXDATE-removal restores it).
 	 *
 	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 * @return array{status: string, wrote: bool} wrote=false when the instance was
+	 *   already cancelled (a free no-op that must NOT consume the write budget — this
+	 *   is what makes re-asserting a long-accumulated EXDATE set cost nothing).
 	 */
-	private function cancelInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): string {
+	private function cancelInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, string $rawToken): array {
 		if ($inst['status'] === 'cancelled') {
 			$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
-			return OutboundWriteService::UPDATED;
+			return ['status' => OutboundWriteService::UPDATED, 'wrote' => false];
 		}
 		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], ['status' => 'cancelled'], $inst['etag']);
 		$res = $out['result'];
@@ -462,12 +498,12 @@ class OutboundRecurrenceService {
 			$status = $res['statusCode'] ?? null;
 			if ($status === 404 || $status === 410) {
 				$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
-				return OutboundWriteService::UPDATED;
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 			}
-			return OutboundWriteService::ERROR;
+			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}
 		$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
-		return OutboundWriteService::UPDATED;
+		return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 	}
 
 	/**
@@ -480,8 +516,10 @@ class OutboundRecurrenceService {
 	 * partial so Google-side attendees survive; status='confirmed' un-cancels.
 	 *
 	 * @param array{instanceId:string, status:string, etag:?string, updated:?string, ost:array} $inst
+	 * @return array{status: string, wrote: bool} always wrote=true — an override has
+	 *   no cheap idempotency check (content can differ), so it always patches.
 	 */
-	private function overrideInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, VEvent $ov, string $rawToken): string {
+	private function overrideInstance(string $userId, string $calId, int $ncCalId, string $ncUri, array $inst, VEvent $ov, string $rawToken): array {
 		$body = OutboundWriteService::buildEventFields($ov, $ncUri, true);
 		$body['status'] = 'confirmed';
 		$out = $this->patchInstanceResilient($userId, $calId, (string)$inst['instanceId'], $body, $inst['etag']);
@@ -489,16 +527,16 @@ class OutboundRecurrenceService {
 		if (isset($res['error'])) {
 			$status = $res['statusCode'] ?? null;
 			if ($status === 404 || $status === 410) {
-				return OutboundWriteService::UPDATED; // instance vanished; nothing to override
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true]; // instance vanished; nothing to override
 			}
-			return OutboundWriteService::ERROR;
+			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}
 		$this->eventMapService->recordOutboundSibling(
 			$ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'],
 			isset($res['updated']) ? (string)$res['updated'] : $out['updated'],
 			isset($res['etag']) ? (string)$res['etag'] : $out['etag'],
 		);
-		return OutboundWriteService::UPDATED;
+		return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 	}
 
 	/**

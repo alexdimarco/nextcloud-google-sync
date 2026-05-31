@@ -17,7 +17,7 @@ way out.
 | Script | Verifies |
 | --- | --- |
 | `p4-transient-error-resume.php` | A transient `503` on one override PATCH **holds** the change token and leaves `nc_etag` at its pre-edit value, so the series re-classifies `LOCAL_EDIT` and the **next** reconcile RESUMES and converges (Google override reaches `ov v2`, inbound echo = 0). |
-| `p4-budget-overflow.php` | The per-tick `instanceOpBudget()` circuit breaker: the first N ops sync and the token **ADVANCES** (no wedge), but the overflow beyond N stays **one-way** — it does NOT resume on a later tick without a fresh NC edit (there is no overflow cursor). Documents, not endorses, the v1 limitation in `docs/RECURRENCE_OUTBOUND.md`. |
+| `p4-budget-overflow.php` | The per-tick `instanceOpBudget()` circuit breaker, two scenarios: **(A)** the first N writes sync and the token **ADVANCES** (no wedge), but the overflow beyond N stays **one-way** — it does NOT resume without a fresh NC edit (no cursor); **(B)** write-only counting — two already-cancelled EXDATEs re-asserted on a later edit are free no-ops, so a new override **still syncs** under budget=2 (the old count-every-op behavior would have starved it). Documents, not endorses, the v1 limitation in `docs/RECURRENCE_OUTBOUND.md`. |
 
 `p4-budget-overflow.php` lowers the breaker by subclassing the service and
 overriding `instanceOpBudget()` to return `2`; production stays at the default
