@@ -333,7 +333,7 @@ class OutboundWriteService {
 				return self::DELETED;
 			}
 			if ($status === 412) {
-				return $this->resolveDeleteConflict($userId, $calId, $ncCalId, $ncUri, $googleId);
+				return $this->resolveDeleteConflict($userId, $calId, $ncCalId, $ncUri, $googleId, $row->getOrigin());
 			}
 			$this->logger->warning(
 				'Calendar Bridge: outbound delete failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . '): ' . (string)$result['error'],
@@ -364,14 +364,24 @@ class OutboundWriteService {
 	}
 
 	/**
-	 * Resolve a 412 on delete (the Google copy was edited since our baseline).
-	 * v1 policy: NC-delete-wins. Re-GET the live event; if it is still OURS
-	 * (extendedProperties.private.ncOrigin == this NC uri) re-delete it with the
-	 * fresh etag; if it is no longer ours (ncOrigin gone/repointed) do NOT destroy
-	 * a foreign event — drop the stale mapping instead. A 404/410 on the re-read
-	 * means it is already gone.
+	 * Whether a 412'd delete target is a FOREIGN Google event we must not destroy.
+	 * Only an NC-authored ('nc') event can become foreign: it should carry our
+	 * ncOrigin tag, so a stripped/repointed tag means the event is no longer the
+	 * one we pushed. A google-origin (imported) event has no tag and is ours by
+	 * its stable google_id (we GET by it), so it is NEVER foreign. Pure.
 	 */
-	private function resolveDeleteConflict(string $userId, string $calId, int $ncCalId, string $ncUri, string $googleId): string {
+	public static function isForeignDelete(string $origin, ?string $liveNcOrigin, string $ncUri): bool {
+		return $origin === 'nc' && $liveNcOrigin !== $ncUri;
+	}
+
+	/**
+	 * Resolve a 412 on delete (the Google copy was edited since our baseline).
+	 * v1 policy: NC-delete-wins. Re-GET the live event and re-delete it with the
+	 * fresh etag — UNLESS it is a foreign event we authored but no longer own
+	 * (isForeignDelete), in which case drop the stale mapping without deleting.
+	 * A 404/410 on the re-read means it is already gone.
+	 */
+	private function resolveDeleteConflict(string $userId, string $calId, int $ncCalId, string $ncUri, string $googleId, string $origin): string {
 		$live = $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($calId) . '/events/' . urlencode($googleId));
 		if (isset($live['error'])) {
 			$status = $live['statusCode'] ?? null;
@@ -386,7 +396,7 @@ class OutboundWriteService {
 			return self::CONFLICT;
 		}
 		$liveNcOrigin = $live['extendedProperties']['private']['ncOrigin'] ?? null;
-		if ($liveNcOrigin !== $ncUri) {
+		if (self::isForeignDelete($origin, is_string($liveNcOrigin) ? $liveNcOrigin : null, $ncUri)) {
 			$this->logger->info(
 				'Calendar Bridge: delete of ' . $ncUri . ' hit a Google event that is no longer ours (ncOrigin mismatch); not deleting, dropping mapping',
 				['app' => Application::APP_ID],
