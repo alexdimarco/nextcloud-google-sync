@@ -224,6 +224,74 @@ class EventMapService {
 	}
 
 	/**
+	 * The recurrence-instance sibling rows of one NC object (origin-agnostic),
+	 * or [] on error. recurrence_id is the RAW Google originalStartTime token;
+	 * canonical matching is the caller's job (via RecurrenceKey::fromGoogleToken).
+	 *
+	 * @return EventMap[]
+	 */
+	public function findSiblings(int $ncCalId, string $ncUri): array {
+		try {
+			return $this->mapper->findSiblingsForNcUri($ncCalId, $ncUri);
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: sibling lookup failed for ' . $ncUri . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return [];
+		}
+	}
+
+	/**
+	 * Upsert ONE recurrence-instance sibling row after an outbound instance
+	 * write. $recurrenceId is the RAW Google originalStartTime of the live
+	 * instance (kept identical to the inbound recordFromImport format so a row
+	 * is shared, never duplicated). state defaults to 'synced'.
+	 */
+	public function recordOutboundSibling(int $ncCalId, string $ncUri, string $recurrenceId, string $googleId, ?string $googleUpdated, ?string $baselineEtag, string $state = 'synced'): void {
+		$this->upsert($ncCalId, $ncUri, $recurrenceId, static function (EventMap $row) use ($googleId, $googleUpdated, $baselineEtag, $state): void {
+			$row->setGoogleId($googleId);
+			$row->setOrigin('nc');
+			if ($googleUpdated !== null) {
+				$row->setGoogleUpdated($googleUpdated);
+			}
+			if ($baselineEtag !== null) {
+				$row->setBaselineEtag($baselineEtag);
+			}
+			$row->setState($state);
+		});
+	}
+
+	/**
+	 * Mark a sibling row 'cancelled' (an occurrence the user EXDATE'd). The row
+	 * is KEPT (not deleted) so a later restore can target it. No-op if absent.
+	 */
+	public function markSiblingCancelled(int $ncCalId, string $ncUri, string $recurrenceId): void {
+		$this->upsert($ncCalId, $ncUri, $recurrenceId, static function (EventMap $row): void {
+			$row->setState('cancelled');
+		});
+	}
+
+	/**
+	 * Record the master-row recurrence baselines used by the outbound differ's
+	 * refusal guards (shape / RRULE / DTSTART as of the last successful sync).
+	 * Only overwrites a baseline when a non-null value is supplied.
+	 */
+	public function recordSeriesBaseline(int $ncCalId, string $ncUri, ?string $shape, ?string $baselineRrule, ?string $masterDtstart): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($shape, $baselineRrule, $masterDtstart): void {
+			if ($shape !== null) {
+				$row->setShape($shape);
+			}
+			if ($baselineRrule !== null) {
+				$row->setBaselineRrule($baselineRrule);
+			}
+			if ($masterDtstart !== null) {
+				$row->setMasterDtstart($masterDtstart);
+			}
+		});
+	}
+
+	/**
 	 * Whether an NC-ORIGIN map row exists for this Google id. Used by the
 	 * inbound echo de-dup to recognize "the user deleted an event we pushed,
 	 * before its echo arrived" — in which case the echo must NOT resurrect the

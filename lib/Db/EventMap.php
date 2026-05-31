@@ -39,6 +39,12 @@ use OCP\AppFramework\Db\Entity;
  * @method void setState(string $state)
  * @method string|null getLastError()
  * @method void setLastError(?string $lastError)
+ * @method string|null getShape()
+ * @method void setShape(?string $shape)
+ * @method string|null getBaselineRrule()
+ * @method void setBaselineRrule(?string $baselineRrule)
+ * @method string|null getMasterDtstart()
+ * @method void setMasterDtstart(?string $masterDtstart)
  */
 class EventMap extends Entity {
 	protected int $ncCalId = 0;
@@ -53,6 +59,10 @@ class EventMap extends Entity {
 	protected ?int $ncLastmodified = null;
 	protected string $state = 'synced';
 	protected ?string $lastError = null;
+	/** Phase 4 outbound-recurrence refusal-guard baselines (master row only). */
+	protected ?string $shape = null;
+	protected ?string $baselineRrule = null;
+	protected ?string $masterDtstart = null;
 
 	public function __construct() {
 		$this->addType('ncCalId', 'integer');

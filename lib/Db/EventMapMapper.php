@@ -71,6 +71,23 @@ class EventMapMapper extends QBMapper {
 	}
 
 	/**
+	 * The recurrence-instance SIBLING rows (recurrence_id <> '') of one NC
+	 * object — the per-instance overrides/cancellations of a recurring series.
+	 * The master row (recurrence_id = '') is excluded.
+	 *
+	 * @return EventMap[]
+	 */
+	public function findSiblingsForNcUri(int $ncCalId, string $ncUri): array {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('*')
+			->from($this->getTableName())
+			->where($qb->expr()->eq('nc_cal_id', $qb->createNamedParameter($ncCalId, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('nc_uri', $qb->createNamedParameter($ncUri)))
+			->andWhere($qb->expr()->neq('recurrence_id', $qb->createNamedParameter('')));
+		return $this->findEntities($qb);
+	}
+
+	/**
 	 * Delete every row (master + all recurrence-instance siblings) for one
 	 * NC calendar object. Returns the number of rows removed.
 	 */
