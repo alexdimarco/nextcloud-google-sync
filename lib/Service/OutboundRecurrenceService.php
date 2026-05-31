@@ -38,8 +38,14 @@ use Throwable;
  */
 class OutboundRecurrenceService {
 
-	/** Max per-series instance writes per reconcile tick (circuit breaker). */
-	private const INSTANCE_OP_BUDGET = 100;
+	/**
+	 * Max per-series instance writes per reconcile tick (circuit breaker). A
+	 * method (not a const) so a lab/manual test can subclass + lower it without
+	 * editing the source; production is the default.
+	 */
+	protected function instanceOpBudget(): int {
+		return 100;
+	}
 
 	public function __construct(
 		private CalDavBackend $caldavBackend,
@@ -121,8 +127,8 @@ class OutboundRecurrenceService {
 				// recordLocalNew set nc_etag = the current NC etag (-> ECHO), which
 				// would strand them; reset it so the object re-classifies LOCAL_EDIT
 				// next tick (the held token keeps it in the delta) and the differ
-				// resumes idempotently. (A DEFERRED budget remainder converges as
-				// CREATED and re-syncs on a later edit — DEFERRED advances the token.)
+				// resumes idempotently. (A DEFERRED diff converges as CREATED and
+				// advances the token — see the budget breaker for its limitation.)
 				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, '', null, null);
 				return OutboundWriteService::ERROR;
 			}
@@ -192,8 +198,9 @@ class OutboundRecurrenceService {
 			// every outcome EXCEPT a transient ERROR. ERROR holds the calendar token
 			// (reconciler), so leaving nc_etag at its pre-edit value re-classifies the
 			// object as LOCAL_EDIT next tick and the differ resumes idempotently.
-			// DEFERRED_INSTANCE ADVANCES the token (anti-wedge): a budget/far-future
-			// remainder converges now and re-syncs on a later edit / full pull.
+			// DEFERRED_INSTANCE ADVANCES the token (anti-wedge) and converges; a
+			// far-future instance re-syncs on a later edit once Google materializes
+			// it, but the budget OVERFLOW stays one-way (see the budget breaker).
 			if ($diffStatus !== OutboundWriteService::ERROR) {
 				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, isset($obj['etag']) ? (string)$obj['etag'] : null, null, null);
 				$this->recordSeriesBaseline($ncCalId, $ncUri, $master);
@@ -361,11 +368,14 @@ class OutboundRecurrenceService {
 			}
 			// Per-tick circuit breaker: cap the per-series instance writes so a
 			// pathological series (hundreds of customized occurrences) cannot make
-			// unbounded API calls in one cron tick. The remainder syncs on a later
-			// edit / full pull (logged).
-			if ($ops >= self::INSTANCE_OP_BUDGET) {
+			// unbounded API calls in one cron tick. DEFERRED advances the token (no
+			// wedge). LAB-VERIFIED LIMITATION: there is no resume cursor, so each run
+			// re-processes the SAME first N keys (stable order) — the first N
+			// customizations sync (and keep updating), but the OVERFLOW beyond N
+			// stays one-way (at the base expansion) until a resume cursor lands.
+			if ($ops >= $this->instanceOpBudget()) {
 				$this->logger->warning(
-					'Calendar Bridge: series ' . $ncUri . ' exceeded the per-tick instance-op budget (' . self::INSTANCE_OP_BUDGET . '); remaining instances deferred',
+					'Calendar Bridge: series ' . $ncUri . ' exceeded the per-tick instance-op budget (' . $this->instanceOpBudget() . '); remaining instances deferred',
 					['app' => Application::APP_ID],
 				);
 				$deferred = true;

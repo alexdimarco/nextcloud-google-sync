@@ -211,8 +211,8 @@ The Phase-4 adversarial review (8 confirmed findings) drove these changes:
   immediately, but `nc_etag` (the ECHO marker) is set ONLY on a complete diff;
   a transient ERROR holds the change token, so the series re-classifies as
   LOCAL_EDIT next tick and the differ resumes idempotently (CREATE resets nc_etag
-  so it too resumes). DEFERRED_INSTANCE ADVANCES the token (anti-wedge): a budget
-  or far-future remainder converges now and re-syncs on a later edit / full pull.
+  so it too resumes). DEFERRED_INSTANCE ADVANCES the token (anti-wedge), so one
+  stuck series can never freeze the whole calendar (round-2 fix).
 - EXDATE removal RESTORES a previously-cancelled occurrence (cancelled sibling
   rows are iterated and patched back to status=confirmed).
 - Per-instance writes are NC-WINS (no per-instance LWW). A master PATCH propagates
@@ -223,10 +223,20 @@ The Phase-4 adversarial review (8 confirmed findings) drove these changes:
   by the sibling-aware echo gate. Net per-instance conflict policy: the side that
   most recently edited the SERIES wins (a coarse LWW), consistent with ties->NC.
 
-Accepted v1 limitations (non-corrupting, documented):
+Accepted v1 limitations (non-corrupting, documented; the last two LAB-VERIFIED
+via fault injection):
 - A Google-side per-instance edit CONCURRENT with an NC series edit resolves
   NC-wins for that tick (the master-PATCH propagation resets it regardless);
   it re-syncs inbound once NC is quiescent.
 - A multi-instance outbound edit can trigger ONE spurious inbound re-render
   (stale sibling baselines from intra-series etag bumps); it self-corrects via
   the inbound sibling-baseline refresh and converges.
+- A transient instance-write failure RESUMES: lab-verified by injecting a 503 on
+  one override patch — the token is held, nc_etag is left pre-edit, and the next
+  reconcile re-runs and converges (the override lands).
+- BUDGET OVERFLOW (a series with more than INSTANCE_OP_BUDGET=100 individually-
+  customized occurrences): lab-verified that the first N sync (and keep updating
+  on re-edit) and the token ADVANCES (no wedge), BUT the overflow beyond N stays
+  one-way — there is NO resume cursor, so each run re-processes the same first N.
+  A persisted resume cursor (the design's "advancing PARTIAL") is deferred; >100
+  single-series customizations is pathological. NOT "syncs on a later edit".
