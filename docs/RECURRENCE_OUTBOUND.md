@@ -209,9 +209,10 @@ The Phase-4 adversarial review (8 confirmed findings) drove these changes:
   this-and-following split on an imported series bypassed the refusal guards).
 - Incomplete instance diffs RESUME: the master Google baseline is refreshed
   immediately, but `nc_etag` (the ECHO marker) is set ONLY on a complete diff;
-  ERROR/DEFERRED_INSTANCE hold the change token, so the series re-classifies as
+  a transient ERROR holds the change token, so the series re-classifies as
   LOCAL_EDIT next tick and the differ resumes idempotently (CREATE resets nc_etag
-  so it too resumes). DEFERRED_INSTANCE now holds the token.
+  so it too resumes). DEFERRED_INSTANCE ADVANCES the token (anti-wedge): a budget
+  or far-future remainder converges now and re-syncs on a later edit / full pull.
 - EXDATE removal RESTORES a previously-cancelled occurrence (cancelled sibling
   rows are iterated and patched back to status=confirmed).
 - Per-instance writes are NC-WINS (no per-instance LWW). A master PATCH propagates

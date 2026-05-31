@@ -116,13 +116,15 @@ class OutboundRecurrenceService {
 				['app' => Application::APP_ID],
 			);
 			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
-			if ($diffStatus === OutboundWriteService::ERROR || $diffStatus === OutboundWriteService::DEFERRED_INSTANCE) {
-				// Master created, but some initial overrides/EXDATEs are unfinished.
+			if ($diffStatus === OutboundWriteService::ERROR) {
+				// Master created, but an initial override/EXDATE failed transiently.
 				// recordLocalNew set nc_etag = the current NC etag (-> ECHO), which
-				// would strand them; reset it so the object re-classifies as
-				// LOCAL_EDIT next tick and the differ resumes (idempotently).
+				// would strand them; reset it so the object re-classifies LOCAL_EDIT
+				// next tick (the held token keeps it in the delta) and the differ
+				// resumes idempotently. (A DEFERRED budget remainder converges as
+				// CREATED and re-syncs on a later edit — DEFERRED advances the token.)
 				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, '', null, null);
-				return $diffStatus;
+				return OutboundWriteService::ERROR;
 			}
 			return OutboundWriteService::CREATED;
 		} catch (Throwable $e) {
@@ -186,11 +188,13 @@ class OutboundRecurrenceService {
 			// 2) per-instance overrides + EXDATE cancellations.
 			$diffStatus = $this->runInstanceDiff($userId, $calId, $ncCalId, $ncUri, $masterId, (string)$obj['calendardata']);
 
-			// 3) Converge ONLY on a complete diff: set nc_etag (so the series reads
-			// ECHO) + the guard baselines. On ERROR/DEFERRED leave nc_etag at its
-			// pre-edit value so the object re-classifies LOCAL_EDIT next tick and the
-			// differ resumes (the calendar token is held by the reconciler).
-			if ($diffStatus !== OutboundWriteService::ERROR && $diffStatus !== OutboundWriteService::DEFERRED_INSTANCE) {
+			// 3) Set nc_etag (so the series reads ECHO) + the guard baselines on
+			// every outcome EXCEPT a transient ERROR. ERROR holds the calendar token
+			// (reconciler), so leaving nc_etag at its pre-edit value re-classifies the
+			// object as LOCAL_EDIT next tick and the differ resumes idempotently.
+			// DEFERRED_INSTANCE ADVANCES the token (anti-wedge): a budget/far-future
+			// remainder converges now and re-syncs on a later edit / full pull.
+			if ($diffStatus !== OutboundWriteService::ERROR) {
 				$this->eventMapService->recordOutboundUpdate($ncCalId, $ncUri, isset($obj['etag']) ? (string)$obj['etag'] : null, null, null);
 				$this->recordSeriesBaseline($ncCalId, $ncUri, $master);
 			}
@@ -403,6 +407,9 @@ class OutboundRecurrenceService {
 		if (isset($res['error'])) {
 			$status = $res['statusCode'] ?? null;
 			if ($status === 404 || $status === 410) {
+				// Gone on Google — can't restore. Clear the 'cancelled' marker
+				// (-> 'synced') so it is not re-selected for restore every tick.
+				$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'], null, null);
 				return OutboundWriteService::UPDATED;
 			}
 			return OutboundWriteService::ERROR;

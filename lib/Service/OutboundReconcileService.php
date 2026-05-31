@@ -218,7 +218,7 @@ class OutboundReconcileService {
 						$status = $this->isRecurring($ncCalId, $uri)
 							? $this->recurrenceService->createLocalSeriesInGoogle($userId, $calId, $ncCalId, $uri)
 							: $this->writeService->createLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
-						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT || $status === OutboundWriteService::DEFERRED_INSTANCE) {
+						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
 						$this->logger->info(
@@ -233,7 +233,7 @@ class OutboundReconcileService {
 						$status = $this->isRecurring($ncCalId, $uri)
 							? $this->recurrenceService->updateLocalSeriesInGoogle($userId, $calId, $ncCalId, $uri)
 							: $this->writeService->updateLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
-						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT || $status === OutboundWriteService::DEFERRED_INSTANCE) {
+						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
 						$this->logger->info(
@@ -257,7 +257,7 @@ class OutboundReconcileService {
 					// Phase 2c-ii: delete the mapped Google event for a deleted NC
 					// object. NC-delete-wins on a 412 conflict (see write service).
 					$status = $this->writeService->deleteLocalEventInGoogle($userId, $calId, $ncCalId, $uri);
-					if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT || $status === OutboundWriteService::DEFERRED_INSTANCE) {
+					if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 						$advance = false;
 					}
 					$this->logger->info(
