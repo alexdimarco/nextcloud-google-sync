@@ -10,3 +10,4 @@ node_modules
 build
 .php-cs-fixer.cache
 .phpactor.json
+.claude/
