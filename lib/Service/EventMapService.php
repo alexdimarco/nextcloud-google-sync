@@ -87,6 +87,10 @@ class EventMapService {
 			$row->setIcalUid(isset($masterEvent['iCalUID']) ? (string)$masterEvent['iCalUID'] : null);
 			$row->setOrigin('google');
 			$row->setGoogleUpdated(isset($masterEvent['updated']) ? (string)$masterEvent['updated'] : null);
+			// Keep the Google etag fresh on every inbound import so a later
+			// outbound edit's If-Match uses the current baseline (a stale one
+			// would 412 against our own prior import — a false conflict).
+			$row->setBaselineEtag(isset($masterEvent['etag']) ? (string)$masterEvent['etag'] : null);
 			if ($ncEtag !== null) {
 				$row->setNcEtag($ncEtag);
 			}
@@ -114,6 +118,7 @@ class EventMapService {
 				$row->setIcalUid(isset($ex['iCalUID']) ? (string)$ex['iCalUID'] : null);
 				$row->setOrigin('google');
 				$row->setGoogleUpdated(isset($ex['updated']) ? (string)$ex['updated'] : null);
+				$row->setBaselineEtag(isset($ex['etag']) ? (string)$ex['etag'] : null);
 				$row->setState('synced');
 			});
 		}
@@ -142,8 +147,8 @@ class EventMapService {
 	 * Distinct from recordFromImport, which hardcodes origin='google' and
 	 * nc_uri = the Google master id — both wrong for an NC-origin row.
 	 */
-	public function recordLocalNew(int $ncCalId, string $ncUri, string $icalUid, ?string $ncEtag, string $googleId, ?string $googleUpdated): void {
-		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($icalUid, $ncEtag, $googleId, $googleUpdated): void {
+	public function recordLocalNew(int $ncCalId, string $ncUri, string $icalUid, ?string $ncEtag, string $googleId, ?string $googleUpdated, ?string $baselineEtag = null): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($icalUid, $ncEtag, $googleId, $googleUpdated, $baselineEtag): void {
 			$row->setGoogleId($googleId);
 			$row->setIcalUid($icalUid !== '' ? $icalUid : null);
 			$row->setOrigin('nc');
@@ -151,6 +156,9 @@ class EventMapService {
 				$row->setNcEtag($ncEtag);
 			}
 			$row->setGoogleUpdated($googleUpdated);
+			if ($baselineEtag !== null) {
+				$row->setBaselineEtag($baselineEtag);
+			}
 			$row->setState('synced');
 		});
 	}
@@ -162,13 +170,55 @@ class EventMapService {
 	 * must be preserved. origin is set to 'nc' so a row created here (if the
 	 * outbound record was lost to a crash) is still correctly typed.
 	 */
-	public function bindGoogleIdForNcUri(int $ncCalId, string $ncUri, string $googleId, ?string $googleUpdated): void {
-		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($googleId, $googleUpdated): void {
+	public function bindGoogleIdForNcUri(int $ncCalId, string $ncUri, string $googleId, ?string $googleUpdated, ?string $baselineEtag = null): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($googleId, $googleUpdated, $baselineEtag): void {
 			$row->setGoogleId($googleId);
 			if ($googleUpdated !== null) {
 				$row->setGoogleUpdated($googleUpdated);
 			}
+			if ($baselineEtag !== null) {
+				$row->setBaselineEtag($baselineEtag);
+			}
 			$row->setOrigin('nc');
+			$row->setState('synced');
+		});
+	}
+
+	/**
+	 * The master map row for an NC object, or null if none / on error.
+	 */
+	public function getMasterRow(int $ncCalId, string $ncUri): ?EventMap {
+		try {
+			return $this->mapper->findByNcObject($ncCalId, $ncUri, '');
+		} catch (DoesNotExistException) {
+			return null;
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: master-row lookup failed for ' . $ncUri . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return null;
+		}
+	}
+
+	/**
+	 * Re-record after a successful outbound UPDATE (Phase 2c). Refreshes the
+	 * Google baseline_etag + google_updated (so the next edit's If-Match is
+	 * current) and nc_etag (= the NC object's current etag — our PUT touched
+	 * Google, not the NC object, so the next reconcile must read it as ECHO,
+	 * not a second edit). Does NOT change origin or google_id.
+	 */
+	public function recordOutboundUpdate(int $ncCalId, string $ncUri, ?string $ncEtag, ?string $googleUpdated, ?string $baselineEtag): void {
+		$this->upsert($ncCalId, $ncUri, '', static function (EventMap $row) use ($ncEtag, $googleUpdated, $baselineEtag): void {
+			if ($ncEtag !== null) {
+				$row->setNcEtag($ncEtag);
+			}
+			if ($googleUpdated !== null) {
+				$row->setGoogleUpdated($googleUpdated);
+			}
+			if ($baselineEtag !== null) {
+				$row->setBaselineEtag($baselineEtag);
+			}
 			$row->setState('synced');
 		});
 	}

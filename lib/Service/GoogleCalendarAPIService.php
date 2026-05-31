@@ -39,7 +39,7 @@ require_once __DIR__ . '/../../vendor/autoload.php';
 /**
  * Service to make requests to Google v3 (JSON) API
  *
- * @phpstan-type Event array{id: string, iCalUID: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>, extendedProperties?: array{private?: array<string, string>, shared?: array<string, string>}}
+ * @phpstan-type Event array{id: string, iCalUID: string, etag?: string, start?: array{date?: string, dateTime?: string, timeZone?: string}, end?: array{date?: string, dateTime?: string, timeZone?: string}, originalStartTime?: array{date?: string, dateTime?: string, timeZone?: string}, recurringEventId?: string, colorId?: string, summary?: string, visibility?: string, sequence?: string, location?: string, description?: string, status?: string, created?: string, updated?: string, reminders?: array{useDefault?: bool, overrides?: list{array{minutes?: string, hours?: string, days?: string, weeks?: string}}}, recurrence?: list<string>, organizer?: array{email?: string, displayName?: string}, attendees?: list<array{email?: string, displayName?: string, responseStatus?: string, optional?: bool, resource?: bool}>, extendedProperties?: array{private?: array<string, string>, shared?: array<string, string>}}
  */
 class GoogleCalendarAPIService {
 	private DateTimeZone $utcTimezone;
@@ -445,6 +445,84 @@ class GoogleCalendarAPIService {
 	}
 
 	/**
+	 * Apply a genuine Google-side change to an NC-OWNED event (one we pushed,
+	 * carrying ncOrigin) back into its Nextcloud object — the inbound half of
+	 * bidirectional LWW when Google wins. Writes to URI=$ncOrigin (NOT the
+	 * google id) and PRESERVES the NC object's original UID, since
+	 * generateEventData would otherwise stamp the Google-derived UID and change
+	 * the event's identity for CalDAV clients. Records the new baseline so the
+	 * outbound reconcile classifies the write as an ECHO. Never throws.
+	 *
+	 * Returns one of:
+	 *   'applied'    - written to NC successfully.
+	 *   'unmappable' - the Google event cannot be represented in NC (no mappable
+	 *                  start/end). PERMANENT — the caller parks it instead of
+	 *                  retrying, since a re-pull yields the same unmappable data.
+	 *   'error'      - a (possibly transient) write failure; the caller may retry.
+	 *
+	 * @param Event $e
+	 * @param array<int, Event> $exceptions
+	 * @param array<string, array{background?: string}> $eventColors
+	 */
+	private function applyRemoteToNcOrigin(array $e, array $exceptions, int $ncCalId, string $ncOrigin, array $eventColors, string $originalCalData): string {
+		try {
+			$eventData = $this->generateEventData($e, $exceptions, $ncCalId, $eventColors);
+			if ($eventData === '') {
+				$this->logger->warning(
+					'Calendar Bridge: cannot pull Google change into NC-owned event ' . $ncOrigin . ' (no mappable event data)',
+					['app' => Application::APP_ID],
+				);
+				return 'unmappable';
+			}
+			// Preserve the NC object's original UID (generateEventData stamps the
+			// Google-derived UID, which would change the event's identity for
+			// CalDAV clients). Read it via Sabre so a long, RFC5545 line-FOLDED UID
+			// is unfolded correctly, and rewrite EVERY VEVENT's UID (master + any
+			// recurrence overrides) so the override and master stay consistent.
+			// A parse failure of the stored original is NON-fatal: degrade to the
+			// generated UID rather than failing (and then looping) the whole apply.
+			try {
+				$origVcal = Reader::read($originalCalData);
+				$origVevent = $origVcal->{'VEVENT'} ?? null;
+				if ($origVevent instanceof VEvent && isset($origVevent->UID)) {
+					$origUid = (string)$origVevent->UID;
+					$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData);
+				}
+			} catch (Throwable $ex) {
+				$this->logger->warning(
+					'Calendar Bridge: could not parse stored original for ' . $ncOrigin . ' to preserve its UID; applying with the generated UID',
+					['app' => Application::APP_ID],
+				);
+			}
+			$vtimezones = '';
+			foreach ($this->extractTzids($eventData) as $tzid) {
+				$vtimezones .= $this->buildVTimezoneBlock($tzid);
+			}
+			$calData = 'BEGIN:VCALENDAR' . "\n"
+				. 'VERSION:2.0' . "\n"
+				. 'PRODID:NextCloud Calendar' . "\n"
+				. $vtimezones
+				. $eventData
+				. 'END:VCALENDAR';
+			$ncEtag = $this->caldavBackend->updateCalendarObject($ncCalId, $ncOrigin, $calData);
+			// nc_etag = our write's etag (so the reconcile reads ECHO, not edit);
+			// baseline = Google's etag we just applied; google_updated likewise.
+			$this->eventMapService->recordOutboundUpdate(
+				$ncCalId, $ncOrigin, $ncEtag,
+				isset($e['updated']) ? (string)$e['updated'] : null,
+				isset($e['etag']) ? (string)$e['etag'] : null,
+			);
+			return 'applied';
+		} catch (Exception|Throwable $ex) {
+			$this->logger->warning(
+				'Calendar Bridge: failed to pull Google change into NC-owned event ' . $ncOrigin . ': ' . $ex->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return 'error';
+		}
+	}
+
+	/**
 	 * get the most recent event update date in a calendar
 	 *
 	 * @param int $calendarId
@@ -611,6 +689,10 @@ class GoogleCalendarAPIService {
 		$nbAdded = 0;
 		$nbUpdated = 0;
 		$nbDeleted = 0;
+		// Set when a google-wins apply of an NC-owned event fails transiently:
+		// forces the next pull to be FULL so Google re-delivers the (otherwise
+		// unchanged) event and we retry — an incremental pull would not.
+		$forceFullPullNext = false;
 
 		/** @var Event $e */
 		foreach ($events as $e) {
@@ -618,17 +700,87 @@ class GoogleCalendarAPIService {
 
 			// Bidirectional-sync echo indirection: an event WE wrote to Google
 			// (Phase 2b) carries extendedProperties.private.ncOrigin = the NC
-			// object URI. When it echoes back here, bind its google_id onto the
-			// existing NC-origin map row and skip — never mint a duplicate NC
-			// object under URI=$e['id']. Crucially, also drop $ncOrigin from
-			// $unseenURIs: the real object lives under URI=$ncOrigin (not the
-			// google id), so without this the full-pull deletion sweep would
-			// delete the user's own event.
+			// object URI. When it echoes back here we must never mint a duplicate
+			// NC object under URI=$e['id']; we also drop $ncOrigin from
+			// $unseenURIs (the real object lives under URI=$ncOrigin, not the
+			// google id, so without this the full-pull deletion sweep would
+			// delete the user's own event).
 			$ncOrigin = $e['extendedProperties']['private']['ncOrigin'] ?? null;
 			if ($ncOrigin !== null && $ncOrigin !== '') {
 				$original = $this->caldavBackend->getCalendarObject($ncCalId, $ncOrigin);
 				if ($original !== null) {
-					$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null);
+					// An event we own is echoing back. Three states, decided by the
+					// recorded baseline etag AND the NC object's own etag:
+					//  - incoming etag == baseline: Google is unchanged since our
+					//    last write — a pure echo. Bind google_id and skip.
+					//  - Google changed (etag != baseline) but the NC object is
+					//    UNCHANGED since our last write (current etag == nc_etag):
+					//    the Google change is unambiguously newer than anything on
+					//    our side, so apply it — no cross-clock timestamp guess.
+					//  - BOTH sides changed (Google etag != baseline AND NC object
+					//    etag != nc_etag): a real conflict — resolve by the SAME
+					//    pure last-writer-wins rule the outbound path uses, so the
+					//    two paths can never disagree and wedge.
+					// google-wins pulls Google's version into the NC object (UID
+					// preserved) so the same-tick reconcile sees an ECHO; nc-wins
+					// refreshes the baseline so the reconcile's outbound patch (the
+					// NC edit IS in this tick's delta) applies over Google's older
+					// edit. Comparing the NC etag first avoids letting a re-stamped
+					// NC lastmodified (set by our own apply) masquerade as a user
+					// edit on a clock that may differ from Google's.
+					$row = $this->eventMapService->getMasterRow($ncCalId, $ncOrigin);
+					$baseline = $row?->getBaselineEtag();
+					$incomingEtag = isset($e['etag']) ? (string)$e['etag'] : null;
+					$pureEcho = $baseline !== null && $incomingEtag !== null && $incomingEtag === $baseline;
+					if ($pureEcho) {
+						$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+					} else {
+						$mapNcEtag = $row?->getNcEtag();
+						$currentNcEtag = isset($original['etag']) ? (string)$original['etag'] : null;
+						$ncEdited = $mapNcEtag === null || $currentNcEtag === null || $currentNcEtag !== $mapNcEtag;
+						if ($ncEdited) {
+							$ncLastMod = isset($original['lastmodified']) ? (int)$original['lastmodified'] : null;
+							$googleUpdated = isset($e['updated']) ? strtotime((string)$e['updated']) : false;
+							$winner = OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated);
+						} else {
+							$winner = 'google_wins';
+						}
+						if ($winner === 'google_wins') {
+							$applied = $this->applyRemoteToNcOrigin($e, $exceptions, $ncCalId, $ncOrigin, $eventColors, (string)$original['calendardata']);
+							if ($applied === 'applied') {
+								$nbUpdated++;
+								// Also (re-)bind google_id/origin: applyRemoteToNcOrigin
+								// preserves an existing row but would not set them if
+								// the row were somehow absent (a crashed create).
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+								$this->logger->info(
+									'Calendar Bridge: pulled Google-side change into NC-owned event ' . $ncOrigin . ' (LWW: google wins)',
+									['app' => Application::APP_ID],
+								);
+							} elseif ($applied === 'unmappable') {
+								// PERMANENT: the Google version can't be represented in
+								// NC. PARK it — bind the incoming etag as the baseline so
+								// it reads as a pure echo next tick and we stop retrying
+								// (a re-pull yields the same data). Self-heals if Google
+								// later makes the event mappable (etag moves again).
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+							} else {
+								// Possibly-transient failure. Keep google_id bound, leave
+								// the baseline STALE (a clobber is impossible — an outbound
+								// patch would 412 -> google-wins -> abandon). Retry via a
+								// FULL pull, but ONLY from an incremental tick: if the
+								// forced full pull fails again it will NOT re-force (that
+								// tick is non-incremental), so a permanent failure parks
+								// after one retry instead of looping.
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, null, null);
+								if ($isIncremental) {
+									$forceFullPullNext = true;
+								}
+							}
+						} else {
+							$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
+						}
+					}
 					if ($unseenURIs->contains($ncOrigin)) {
 						$unseenURIs->remove($ncOrigin);
 					}
@@ -758,7 +910,7 @@ class GoogleCalendarAPIService {
 		// pull rather than patch the master inline here. On a full pull the
 		// EXDATE path already ran, so save normally.
 		if ($useSyncToken) {
-			$forceFullNext = false;
+			$forceFullNext = $forceFullPullNext;
 			if ($isIncremental) {
 				foreach ($exceptions as $ex) {
 					if (($ex['status'] ?? null) === 'cancelled') {

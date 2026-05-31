@@ -96,6 +96,7 @@
       <code><![CDATA[BadRequest]]></code>
       <code><![CDATA[PropPatch]]></code>
       <code><![CDATA[Reader]]></code>
+      <code><![CDATA[Reader]]></code>
     </UndefinedClass>
     <UndefinedDocblockClass>
       <code><![CDATA[$vCalendar]]></code>
@@ -163,12 +164,14 @@
   <file src="lib/Service/OutboundWriteService.php">
     <MissingDependency>
       <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[private]]></code>
     </MissingDependency>
     <UndefinedClass>
       <code><![CDATA[$vevent->UID]]></code>
       <code><![CDATA[?VEvent]]></code>
       <code><![CDATA[Reader]]></code>
+      <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
       <code><![CDATA[VEvent]]></code>
     </UndefinedClass>
