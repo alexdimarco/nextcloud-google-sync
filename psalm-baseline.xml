@@ -88,7 +88,6 @@
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
-      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[private]]></code>
     </MissingDependency>
     <UndefinedClass>
@@ -96,6 +95,7 @@
       <code><![CDATA[$ex]]></code>
       <code><![CDATA[BadRequest]]></code>
       <code><![CDATA[PropPatch]]></code>
+      <code><![CDATA[Reader]]></code>
       <code><![CDATA[Reader]]></code>
     </UndefinedClass>
     <UndefinedDocblockClass>

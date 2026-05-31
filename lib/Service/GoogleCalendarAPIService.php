@@ -461,12 +461,22 @@ class GoogleCalendarAPIService {
 		try {
 			$eventData = $this->generateEventData($e, $exceptions, $ncCalId, $eventColors);
 			if ($eventData === '') {
+				$this->logger->warning(
+					'Calendar Bridge: cannot pull Google change into NC-owned event ' . $ncOrigin . ' (no mappable event data)',
+					['app' => Application::APP_ID],
+				);
 				return false;
 			}
-			// Preserve the NC object's original UID.
-			if (preg_match('/^UID:(.+)$/m', $originalCalData, $m)) {
-				$origUid = trim($m[1]);
-				$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData, 1);
+			// Preserve the NC object's original UID (generateEventData stamps the
+			// Google-derived UID, which would change the event's identity for
+			// CalDAV clients). Read it via Sabre so a long, RFC5545 line-FOLDED UID
+			// is unfolded correctly, and rewrite EVERY VEVENT's UID (master + any
+			// recurrence overrides) so the override and master stay consistent.
+			$origVcal = Reader::read($originalCalData);
+			$origVevent = $origVcal->{'VEVENT'} ?? null;
+			if ($origVevent instanceof VEvent && isset($origVevent->UID)) {
+				$origUid = (string)$origVevent->UID;
+				$eventData = (string)preg_replace_callback('/^UID:.*$/m', static fn (): string => 'UID:' . $origUid, $eventData);
 			}
 			$vtimezones = '';
 			foreach ($this->extractTzids($eventData) as $tzid) {
@@ -663,6 +673,10 @@ class GoogleCalendarAPIService {
 		$nbAdded = 0;
 		$nbUpdated = 0;
 		$nbDeleted = 0;
+		// Set when a google-wins apply of an NC-owned event fails transiently:
+		// forces the next pull to be FULL so Google re-delivers the (otherwise
+		// unchanged) event and we retry — an incremental pull would not.
+		$forceFullPullNext = false;
 
 		/** @var Event $e */
 		foreach ($events as $e) {
@@ -679,20 +693,25 @@ class GoogleCalendarAPIService {
 			if ($ncOrigin !== null && $ncOrigin !== '') {
 				$original = $this->caldavBackend->getCalendarObject($ncCalId, $ncOrigin);
 				if ($original !== null) {
-					// Distinguish a pure echo from a genuine Google-side change by
-					// comparing the incoming etag to the baseline we recorded:
-					//  - etag == baseline: nothing changed since our last write — a
-					//    true echo. Bind google_id and skip.
-					//  - etag != baseline (or no baseline): Google's copy moved.
-					//    Resolve NC vs Google with the SAME pure last-writer-wins
-					//    rule the outbound path uses (so the two paths can never
-					//    disagree and wedge):
-					//      * Google wins: pull Google's version into the NC object
-					//        now (UID preserved) so the reconcile later this tick
-					//        sees an ECHO and never re-pushes.
-					//      * NC wins: refresh the baseline to Google's current etag
-					//        so the reconcile's outbound patch applies cleanly (NC
-					//        overwrites Google's older edit).
+					// An event we own is echoing back. Three states, decided by the
+					// recorded baseline etag AND the NC object's own etag:
+					//  - incoming etag == baseline: Google is unchanged since our
+					//    last write — a pure echo. Bind google_id and skip.
+					//  - Google changed (etag != baseline) but the NC object is
+					//    UNCHANGED since our last write (current etag == nc_etag):
+					//    the Google change is unambiguously newer than anything on
+					//    our side, so apply it — no cross-clock timestamp guess.
+					//  - BOTH sides changed (Google etag != baseline AND NC object
+					//    etag != nc_etag): a real conflict — resolve by the SAME
+					//    pure last-writer-wins rule the outbound path uses, so the
+					//    two paths can never disagree and wedge.
+					// google-wins pulls Google's version into the NC object (UID
+					// preserved) so the same-tick reconcile sees an ECHO; nc-wins
+					// refreshes the baseline so the reconcile's outbound patch (the
+					// NC edit IS in this tick's delta) applies over Google's older
+					// edit. Comparing the NC etag first avoids letting a re-stamped
+					// NC lastmodified (set by our own apply) masquerade as a user
+					// edit on a clock that may differ from Google's.
 					$row = $this->eventMapService->getMasterRow($ncCalId, $ncOrigin);
 					$baseline = $row?->getBaselineEtag();
 					$incomingEtag = isset($e['etag']) ? (string)$e['etag'] : null;
@@ -700,22 +719,35 @@ class GoogleCalendarAPIService {
 					if ($pureEcho) {
 						$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
 					} else {
-						$ncLastMod = isset($original['lastmodified']) ? (int)$original['lastmodified'] : null;
-						$googleUpdated = isset($e['updated']) ? strtotime((string)$e['updated']) : false;
-						$winner = OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated);
+						$mapNcEtag = $row?->getNcEtag();
+						$currentNcEtag = isset($original['etag']) ? (string)$original['etag'] : null;
+						$ncEdited = $mapNcEtag === null || $currentNcEtag === null || $currentNcEtag !== $mapNcEtag;
+						if ($ncEdited) {
+							$ncLastMod = isset($original['lastmodified']) ? (int)$original['lastmodified'] : null;
+							$googleUpdated = isset($e['updated']) ? strtotime((string)$e['updated']) : false;
+							$winner = OutboundWriteService::resolveConflict($ncLastMod, $googleUpdated === false ? null : $googleUpdated);
+						} else {
+							$winner = 'google_wins';
+						}
 						if ($winner === 'google_wins') {
 							if ($this->applyRemoteToNcOrigin($e, $exceptions, $ncCalId, $ncOrigin, $eventColors, (string)$original['calendardata'])) {
 								$nbUpdated++;
+								// Also (re-)bind google_id/origin: applyRemoteToNcOrigin
+								// preserves an existing row but would not set them if
+								// the row were somehow absent (a crashed create).
+								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
 								$this->logger->info(
 									'Calendar Bridge: pulled Google-side change into NC-owned event ' . $ncOrigin . ' (LWW: google wins)',
 									['app' => Application::APP_ID],
 								);
 							} else {
-								// Apply failed: keep google_id bound but leave the
-								// baseline STALE so we retry next tick. The outbound
-								// patch will 412 -> google-wins -> abandon, so the
-								// stale baseline can never cause a clobber meanwhile.
+								// Apply failed (transient). Keep google_id bound, leave
+								// the baseline STALE (a clobber is impossible — the
+								// outbound patch would 412 -> google-wins -> abandon),
+								// and force a FULL pull next tick so Google re-delivers
+								// this otherwise-unchanged event and we retry.
 								$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, null, null);
+								$forceFullPullNext = true;
 							}
 						} else {
 							$this->eventMapService->bindGoogleIdForNcUri($ncCalId, $ncOrigin, $objectUri, $e['updated'] ?? null, $incomingEtag);
@@ -850,7 +882,7 @@ class GoogleCalendarAPIService {
 		// pull rather than patch the master inline here. On a full pull the
 		// EXDATE path already ran, so save normally.
 		if ($useSyncToken) {
-			$forceFullNext = false;
+			$forceFullNext = $forceFullPullNext;
 			if ($isIncremental) {
 				foreach ($exceptions as $ex) {
 					if (($ex['status'] ?? null) === 'cancelled') {
