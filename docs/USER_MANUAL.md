@@ -60,7 +60,7 @@ Each Google calendar in the list has two buttons:
 
 After you click **Sync calendar**, updates appear in Nextcloud automatically
 whenever your server runs its background jobs (typically every few minutes — see
-[How often does it sync?](#6-how-often-does-it-sync)).
+[How often does it sync?](#7-how-often-does-it-sync)).
 
 ---
 
@@ -89,7 +89,38 @@ occurrences.
 
 ---
 
-## 5. How conflicts are handled
+## 5. Syncing a Nextcloud calendar *to* Google
+
+You can also go the other way: take one of *your* Nextcloud calendars, create a
+matching calendar in Google, and keep them in two-way sync.
+
+In **Settings → Personal → Calendar Bridge**, scroll to **Your Nextcloud
+calendars**. Each of your own calendars has a **Create in Google + sync** button.
+Clicking it:
+
+1. creates a new calendar in your Google account (with the same name),
+2. links the two, and
+3. copies your existing events up to Google and keeps them in sync from then on.
+
+A large calendar's events are pushed gradually over a few background runs (to stay
+within Google's limits), so they may take a little while to all appear.
+
+**You must reconnect once.** Creating Google calendars needs an extra permission
+(`calendar.app.created`). If you connected before this feature existed, click
+**Disconnect from Google** and **Sign in with Google** again to grant it — until
+then the button is disabled with a hint.
+
+Two controls appear once a calendar is linked:
+
+- **Disconnect** — stop syncing but **keep both** calendars and their events.
+- **Delete both calendars** — *(destructive; asks for confirmation)* deletes the
+  Google calendar permanently and moves the Nextcloud one to your calendar trash
+  (recoverable from there).
+
+As with the other direction, **event details sync but guest lists (attendees) do
+not**, and only calendars you own can be synced this way.
+
+## 6. How conflicts are handled
 
 If the *same* event is changed on *both* sides, Calendar Bridge uses
 **last-writer-wins**: the most recent change wins, and if the timing is a tie,
@@ -101,7 +132,7 @@ it is deleted in Google, and vice-versa.
 
 ---
 
-## 6. How often does it sync?
+## 7. How often does it sync?
 
 Calendar Bridge runs inside Nextcloud's **background jobs**. Each time background
 jobs run, it imports the latest Google changes and (if two-way is on) pushes your
@@ -113,7 +144,7 @@ pauses until they resume — see the limitations below.
 
 ---
 
-## 7. Limitations & good-to-knows
+## 8. Limitations & good-to-knows
 
 These are intentional, non-destructive trade-offs. None of them lose or corrupt
 your data — at worst, one change syncs later or stays one-directional.
@@ -154,7 +185,7 @@ automatically.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | What to try |
 | --- | --- |

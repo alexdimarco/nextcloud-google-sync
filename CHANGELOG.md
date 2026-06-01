@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.5.0]
+
+### Added
+
+- **Sync a Nextcloud calendar to Google** (the other direction). A new "Your
+  Nextcloud calendars" section in Personal settings lets you create a matching
+  Google calendar from one of your own Nextcloud calendars and two-way-sync it.
+  Its existing events are pushed to Google in the background (cap-and-drain, so a
+  large calendar drains over several runs without hitting Google's rate limits).
+  Includes **Disconnect** (unlink, keep both calendars) and a confirmed **Delete
+  both calendars** (Google permanently, Nextcloud to the calendar trash).
+  Requires reconnecting your Google account once to grant the minimal
+  `calendar.app.created` scope. Event details sync; attendee lists do not.
+
 ## [4.4.0]
 
 ### Added
