@@ -414,6 +414,10 @@ export default {
 				// Read-write events scope: enables opt-in two-way (NC -> Google)
 				// sync. Existing read-only users keep working until they reconnect.
 				'https://www.googleapis.com/auth/calendar.events',
+				// Create + manage app-created calendars: enables creating a Google
+				// calendar from a Nextcloud one. Granted on reconnect; harmless if
+				// unused. (calendar-level NC -> Google sync.)
+				'https://www.googleapis.com/auth/calendar.app.created',
 				'https://www.googleapis.com/auth/contacts.readonly',
 				'https://www.googleapis.com/auth/drive.readonly',
 				'https://www.googleapis.com/auth/contacts.other.readonly',
