@@ -59,10 +59,6 @@ $check = static function (string $label, bool $ok) use (&$pass): void {
 };
 $tokKey = static fn (string $g): string => 'nc_change_token_' . md5($g);
 
-// Outbound writes are gated on the write scope; grant it for the test, restore after.
-$origScopes = $config->getUserValue($USER, $APP, 'user_scopes', '__unset__');
-$config->setUserValue($USER, $APP, 'user_scopes', json_encode(['can_write_calendar' => 1]));
-
 // ===================== Part A: lifecycle state =====================
 echo "Part A — trash=PAUSE / restore=RESUME / purge=UNLINK (state + token + event-map)\n";
 $gid = "tr-$run@group.calendar.google.com";
@@ -187,7 +183,14 @@ $fault = new class($realG) extends GoogleAPIService {
 };
 $ws = new OutboundWriteService($be, $fault, $ems, $logger);
 $ors = new OutboundRecurrenceService($be, $fault, $ems, $logger);
-$recon = new OutboundReconcileService($be, $mapper, $config, $logger, $ws, $ors, $cms);
+// Force the write gate ON in the reconcile subclass so the test exercises the
+// outbound delete regardless of the ambient user_scopes pref — the test must not
+// depend on (or mutate) that shared OAuth-grant state.
+$recon = new class($be, $mapper, $config, $logger, $ws, $ors, $cms) extends OutboundReconcileService {
+	public function hasWriteScope(string $userId): bool {
+		return true;
+	}
+};
 $recon->reconcile($USER, $gidB, $calIdB);
 
 $flushed = false;
@@ -206,13 +209,6 @@ $config->deleteUserValue($USER, $APP, $twoWayKeyB);
 $config->deleteUserValue($USER, $APP, $tokKey($gidB));
 $ems->removeForCalendar($calIdB);
 $be->deleteCalendar($calIdB, true);
-
-// restore the original write-scope pref
-if ($origScopes === '__unset__') {
-	$config->deleteUserValue($USER, $APP, 'user_scopes');
-} else {
-	$config->setUserValue($USER, $APP, 'user_scopes', $origScopes);
-}
 
 echo "\n" . ($pass ? 'ALL PASS' : 'SOME FAILED') . "\n";
 exit($pass ? 0 : 1);
