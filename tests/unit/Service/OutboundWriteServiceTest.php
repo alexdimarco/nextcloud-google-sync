@@ -139,4 +139,22 @@ class OutboundWriteServiceTest extends TestCase {
 		$this->assertFalse(OutboundWriteService::isForeignDelete('google', null, 'google-master-id'));
 		$this->assertFalse(OutboundWriteService::isForeignDelete('google', 'anything', 'google-master-id'));
 	}
+
+	// ---- isPermanentBodyRejection (P-d: terminal SKIPPED_REJECTED vs transient hold) ----
+
+	public function testPermanentCreateFailureOnlyForMalformedBodyStatuses(): void {
+		$this->assertTrue(OutboundWriteService::isPermanentBodyRejection(400));
+		$this->assertTrue(OutboundWriteService::isPermanentBodyRejection(422));
+	}
+
+	public function testTransientCreateFailuresAreNotPermanent(): void {
+		// 403 is left transient (Google uses it for rate/quota limits); 404/410/5xx/
+		// 429/409/unknown are transient too -> hold + retry, never silently dropped.
+		foreach ([403, 404, 410, 429, 500, 502, 503, 409, null] as $status) {
+			$this->assertFalse(
+				OutboundWriteService::isPermanentBodyRejection($status),
+				'status ' . var_export($status, true) . ' must be transient',
+			);
+		}
+	}
 }
