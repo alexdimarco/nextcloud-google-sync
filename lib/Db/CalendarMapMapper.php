@@ -54,4 +54,15 @@ class CalendarMapMapper extends QBMapper {
 			->where($qb->expr()->eq('google_cal_id', $qb->createNamedParameter($googleCalId)));
 		return $qb->executeStatement();
 	}
+
+	/**
+	 * Delete the pairing for a Nextcloud calendar id (out-of-band NC deletion
+	 * cleanup). Returns rows removed.
+	 */
+	public function deleteByNcCalId(int $ncCalId): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete($this->getTableName())
+			->where($qb->expr()->eq('nc_cal_id', $qb->createNamedParameter($ncCalId, IQueryBuilder::PARAM_INT)));
+		return $qb->executeStatement();
+	}
 }

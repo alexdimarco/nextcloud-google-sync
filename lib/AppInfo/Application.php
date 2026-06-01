@@ -10,7 +10,9 @@
 
 namespace OCA\CalendarBridge\AppInfo;
 
+use OCA\CalendarBridge\Listener\CalendarDeletedListener;
 use OCA\CalendarBridge\Notification\Notifier;
+use OCA\DAV\Events\CalendarDeletedEvent;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
@@ -28,6 +30,9 @@ class Application extends App implements IBootstrap {
 
 	public function register(IRegistrationContext $context): void {
 		$context->registerNotifierService(Notifier::class);
+		// Clean up a calendar-level pairing if the NC calendar is deleted
+		// out-of-band (Calendar app / occ / account removal).
+		$context->registerEventListener(CalendarDeletedEvent::class, CalendarDeletedListener::class);
 	}
 
 	public function boot(IBootContext $context): void {

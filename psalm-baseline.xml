@@ -5,11 +5,19 @@
       <code><![CDATA[public function boot(IBootContext $context): void {]]></code>
       <code><![CDATA[public function register(IRegistrationContext $context): void {]]></code>
     </MissingOverrideAttribute>
+    <UndefinedClass>
+      <code><![CDATA[CalendarDeletedEvent]]></code>
+    </UndefinedClass>
   </file>
   <file src="lib/BackgroundJob/ImportDriveJob.php">
     <MissingOverrideAttribute>
       <code><![CDATA[public function run($argument) {]]></code>
     </MissingOverrideAttribute>
+  </file>
+  <file src="lib/Listener/CalendarDeletedListener.php">
+    <UndefinedClass>
+      <code><![CDATA[CalendarDeletedEvent]]></code>
+    </UndefinedClass>
   </file>
   <file src="lib/Migration/Version03001001Date20241111105515.php">
     <MissingOverrideAttribute>

@@ -133,6 +133,21 @@ class CalendarMapService {
 	}
 
 	/**
+	 * Remove the pairing for a Nextcloud calendar id (out-of-band NC deletion
+	 * cleanup, P-d). Defensive: never throws.
+	 */
+	public function removeByNcCalId(int $ncCalId): void {
+		try {
+			$this->mapper->deleteByNcCalId($ncCalId);
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: failed to remove calendar pairing for NC calendar ' . $ncCalId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+		}
+	}
+
+	/**
 	 * Remove the pairing for a Google calendar id (un-sync / disconnect, P-c).
 	 * Defensive: never throws.
 	 */
