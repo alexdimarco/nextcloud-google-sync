@@ -89,10 +89,17 @@
 						@update:model-value="onConsiderAllEventsChange">
 						{{ t('outside_provider_calendar_bridge', 'Import all events including Birthdays') }}
 					</NcCheckboxRadioSwitch>
+					<NcButton v-if="unsyncedCalendars.length > 0"
+						:class="{ loading: syncingAll }"
+						:disabled="syncingAll"
+						@click="onSyncAll">
+						{{ t('outside_provider_calendar_bridge', 'Sync all ({count} not synced)', { count: unsyncedCalendars.length }) }}
+					</NcButton>
 					<div v-for="cal in calendars" :key="cal.id" class="calendar-item">
 						<label>
 							<NcAppNavigationIconBullet :color="getCalendarColor(cal)" />
 							<span>{{ getCalendarLabel(cal) }}</span>
+							<span v-if="!cal.isJobRegistered" class="cb-hint">{{ t('outside_provider_calendar_bridge', '(not synced)') }}</span>
 						</label>
 						<NcButton
 							:class="{ loading: importingCalendar[cal.id] }"
@@ -323,6 +330,7 @@ export default {
 			importingCalendar: {},
 			loadingSyncCalendar: {},
 			loadingTwoWay: {},
+			syncingAll: false,
 			// NC -> Google calendar-level sync
 			ncCalendars: [],
 			loadingNcLink: {},
@@ -353,6 +361,9 @@ export default {
 		},
 		connected() {
 			return this.state.user_name && this.state.user_name !== ''
+		},
+		unsyncedCalendars() {
+			return this.calendars.filter(c => !c.isJobRegistered)
 		},
 		totalDriveSize() {
 			return this.driveSize + this.sharedWithMeSize
@@ -536,6 +547,36 @@ export default {
 						t('outside_provider_calendar_bridge', 'Failed to get calendar list'),
 					)
 				})
+		},
+		onSyncAll() {
+			const toSync = this.unsyncedCalendars
+			if (toSync.length === 0) {
+				return
+			}
+			this.syncingAll = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/set-sync-calendar')
+			// registerSyncCalendar is idempotent; allSettled so one failure does not
+			// abort the rest. Reconcile UI state per fulfilled result.
+			Promise.allSettled(toSync.map((cal) =>
+				axios.get(url, {
+					params: {
+						calId: cal.id,
+						desiredState: true,
+						calName: this.getCalendarLabel(cal),
+						color: cal.backgroundColor || '#0082c9',
+					},
+				}).then(() => { cal.isJobRegistered = true }),
+			)).then((results) => {
+				const failed = results.filter(r => r.status === 'rejected').length
+				if (failed === 0) {
+					showSuccess(t('outside_provider_calendar_bridge', 'Started syncing all calendars'))
+				} else {
+					showError(this.n('outside_provider_calendar_bridge', '{n} calendar could not be synced', '{n} calendars could not be synced', failed, { n: failed }))
+				}
+			}).finally(() => {
+				this.syncingAll = false
+				this.getGoogleCalendarList()
+			})
 		},
 		getNcCalendarList() {
 			const url = generateUrl('/apps/outside_provider_calendar_bridge/nc-calendars')

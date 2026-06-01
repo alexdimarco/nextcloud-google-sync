@@ -100,6 +100,14 @@ class OutboundRecurrenceService {
 					if ($result === null) {
 						return OutboundWriteService::CONFLICT;
 					}
+				} elseif (OutboundWriteService::isPermanentBodyRejection(is_int($result['statusCode'] ?? null) ? $result['statusCode'] : null)) {
+					// Malformed master Google will always reject — terminal
+					// (advances the token), so it can't wedge the calendar.
+					$this->logger->warning(
+						'Calendar Bridge: create series master PERMANENTLY rejected for ' . $ncUri . ' (status ' . (string)($result['statusCode'] ?? '?') . ') — leaving one-way',
+						['app' => Application::APP_ID],
+					);
+					return OutboundWriteService::SKIPPED_REJECTED;
 				} else {
 					$this->logger->warning(
 						'Calendar Bridge: create series master failed for ' . $ncUri . ' (status ' . (string)($result['statusCode'] ?? '?') . ')',
@@ -182,6 +190,14 @@ class OutboundRecurrenceService {
 						return $masterStatus; // CONFLICT_PARKED (Google won) / ERROR — stop
 					}
 					// NC won + re-patched (baseline recorded inside) — continue.
+				} elseif (OutboundWriteService::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+					// Malformed master edit Google will always reject - terminal
+					// (advances the token), so it can't wedge the calendar.
+					$this->logger->warning(
+						'Calendar Bridge: series master PATCH PERMANENTLY rejected for ' . $ncUri . ' (status ' . (string)$status . ') - leaving one-way',
+						['app' => Application::APP_ID],
+					);
+					return OutboundWriteService::SKIPPED_REJECTED;
 				} else {
 					$this->logger->warning(
 						'Calendar Bridge: series master PATCH failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . ')',
@@ -455,6 +471,13 @@ class OutboundRecurrenceService {
 				$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'], null, null);
 				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 			}
+			if (OutboundWriteService::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+				// Permanently rejected — terminal (must NOT bubble ERROR and wedge
+				// the series/calendar). Clear the marker; leave one-way.
+				$this->logger->warning('Calendar Bridge: instance restore permanently rejected (status ' . (string)$status . ') for ' . $ncUri . ' — leaving one-way', ['app' => Application::APP_ID]);
+				$this->eventMapService->recordOutboundSibling($ncCalId, $ncUri, $rawToken, (string)$inst['instanceId'], null, null);
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
+			}
 			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}
 		$this->eventMapService->recordOutboundSibling(
@@ -500,6 +523,13 @@ class OutboundRecurrenceService {
 				$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
 				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 			}
+			if (OutboundWriteService::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+				// Permanently rejected — terminal (don't wedge). Mark cancelled in
+				// the map so it is not re-selected; leave one-way.
+				$this->logger->warning('Calendar Bridge: instance cancel permanently rejected (status ' . (string)$status . ') for ' . $ncUri . ' — leaving one-way', ['app' => Application::APP_ID]);
+				$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
+			}
 			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}
 		$this->eventMapService->markSiblingCancelled($ncCalId, $ncUri, $rawToken);
@@ -528,6 +558,12 @@ class OutboundRecurrenceService {
 			$status = $res['statusCode'] ?? null;
 			if ($status === 404 || $status === 410) {
 				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true]; // instance vanished; nothing to override
+			}
+			if (OutboundWriteService::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+				// Malformed override body Google will always reject — terminal
+				// (don't wedge the series/calendar); the instance stays one-way.
+				$this->logger->warning('Calendar Bridge: instance override permanently rejected (status ' . (string)$status . ') for ' . $ncUri . ' — leaving one-way', ['app' => Application::APP_ID]);
+				return ['status' => OutboundWriteService::UPDATED, 'wrote' => true];
 			}
 			return ['status' => OutboundWriteService::ERROR, 'wrote' => true];
 		}

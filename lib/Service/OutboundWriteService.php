@@ -44,6 +44,25 @@ class OutboundWriteService {
 	public const SKIPPED_UNSUPPORTED = 'skipped_unsupported';
 	public const DEFERRED_INSTANCE = 'deferred_instance';
 	public const CONFLICT_PARKED = 'conflict_parked';
+	// A Google PERMANENT rejection of the event body (a re-PUT/PATCH/POST of the
+	// same body can never succeed). Terminal — ADVANCES the token, so one malformed
+	// event (on create OR update, flat OR recurring) cannot wedge the calendar
+	// (e.g. the NC-origin bootstrap rescanning + re-POSTing the doomed body every
+	// tick forever, or a bad edit re-PATCHed forever). The event stays in
+	// Nextcloud; a later fixed edit re-triggers a fresh attempt.
+	public const SKIPPED_REJECTED = 'skipped_rejected';
+
+	/**
+	 * Whether a Google write failure is PERMANENT (a re-send of the same body can
+	 * never succeed — malformed body) vs transient (retry). Used by both the create
+	 * and update paths. Pure. Conservative: only a clearly malformed-body status
+	 * counts — 403 is left transient because Google uses it for rate/quota limits,
+	 * and 404/410/5xx/429/unknown may be transient. (Calendar v3 uses 400 for body
+	 * validation; 422 is kept defensively though it is not part of that contract.)
+	 */
+	public static function isPermanentBodyRejection(?int $status): bool {
+		return $status === 400 || $status === 422;
+	}
 
 	public function __construct(
 		private CalDavBackend $caldavBackend,
@@ -92,6 +111,16 @@ class OutboundWriteService {
 				$status = $result['statusCode'] ?? null;
 				if ($status === 409) {
 					return $this->adoptDuplicate($userId, $calId, $ncCalId, $ncUri, $uid, $clientId, $ncEtag);
+				}
+				if (self::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+					// Malformed body Google will always reject — terminal, so it
+					// can't wedge the token (and rescan/re-POST every tick). The NC
+					// object is untouched; a later user edit re-attempts it.
+					$this->logger->warning(
+						'Calendar Bridge: outbound create PERMANENTLY rejected for ' . $ncUri . ' (status ' . (string)$status . '): ' . (string)$result['error'] . ' — leaving one-way',
+						['app' => Application::APP_ID],
+					);
+					return self::SKIPPED_REJECTED;
 				}
 				$this->logger->warning(
 					'Calendar Bridge: outbound create failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . '): ' . (string)$result['error'],
@@ -213,6 +242,16 @@ class OutboundWriteService {
 						['app' => Application::APP_ID],
 					);
 					return self::SKIPPED_GONE;
+				}
+				if (self::isPermanentBodyRejection(is_int($status) ? $status : null)) {
+					// Malformed edit Google will always reject — terminal, so a bad
+					// edit can't wedge the token (re-PATCH every tick). The NC object
+					// stays; a later (fixed) edit re-attempts.
+					$this->logger->warning(
+						'Calendar Bridge: outbound update PERMANENTLY rejected for ' . $ncUri . ' (status ' . (string)$status . '): ' . (string)$result['error'] . ' — leaving one-way',
+						['app' => Application::APP_ID],
+					);
+					return self::SKIPPED_REJECTED;
 				}
 				$this->logger->warning(
 					'Calendar Bridge: outbound update failed for ' . $ncUri . ' (status ' . (string)($status ?? '?') . '): ' . (string)$result['error'],

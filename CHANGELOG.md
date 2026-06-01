@@ -4,7 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [4.5.0]
+## [4.6.0]
+
+### Added
+
+- **"Sync all" button + a "(not synced)" marker** in the Google calendar list, to
+  start background sync for every not-yet-synced calendar at once.
+
+### Fixed
+
+- A Nextcloud calendar that is **linked to Google and then deleted out-of-band**
+  (Calendar app / occ) is now cleanly unlinked (its mapping + background job are
+  removed; the Google calendar is kept) instead of leaving a dangling job.
+- An event Google **permanently rejects** (a malformed body) no longer wedges
+  outbound sync: it is now terminal (logged, left one-way) instead of pinning the
+  change token and re-attempting every run — fixes the "first push never finishes"
+  failure mode for a newly-linked calendar with one bad event.
+- Error toasts now show the **server's actual message** (e.g. "reconnect your
+  Google account") instead of a generic "Request failed with status code N".
 
 ### Added
 
