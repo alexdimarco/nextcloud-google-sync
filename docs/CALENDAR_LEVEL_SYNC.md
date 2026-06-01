@@ -5,7 +5,7 @@
 
 # Design: Calendar-level sync (create a Google calendar from a Nextcloud one)
 
-**Status: IMPLEMENTED (P-a, P-b, P-c shipped). P-d polish remains deferred.**
+**Status: IMPLEMENTED (P-a through P-d shipped, plus trash pause/resume).**
 This document was the design/review gate; the phased plan in §7 tracks status.
 
 Today the app syncs *events* within calendars that originate on Google. This
@@ -244,17 +244,26 @@ Considerations:
     review-caught XSS: server/Google error bodies flowed into the isHTML toast).
   - *(small)* ✅ Direction-B **"Sync all"** button + **"(not synced)"** marker.
 
+- **Trash pause/resume. ✅ DONE.** Soft-delete (the *normal* Calendar-app delete)
+  now fires `CalendarMovedToTrashEvent` → the pairing is **paused** (import job
+  unregistered + two-way off) but the `calbridge_calendar_map` row is **kept**, so
+  the job stops ticking into an invisible calendar for the whole ~30-day retention
+  window. `CalendarRestoredEvent` (un-trash) **resumes** it (re-registers the job +
+  re-enables two-way); because the event-map rows survive trashing, the re-baseline
+  classifies every event as an ECHO rather than re-pushing. The three lifecycle
+  events (delete=unlink, trash=pause, restore=resume) are handled by one
+  `CalendarPairingListener` (replaces `CalendarDeletedListener`). Lab-verified
+  end-to-end (trash→restore→purge), since these are NC-side events that fire
+  without the `calendar.app.created` scope.
+
   Still DEFERRED:
   - *(MED)* The mid-flight-cron-tick **ghost** on delete-both/disconnect teardown
     (no import flock) — genuinely concurrency-tricky, can't be lab-verified without
-    the create scope; deserves its own design + adversarial review.
-  - **Soft-delete (trash) of a linked calendar.** Only `CalendarDeletedEvent`
-    (permanent purge) is handled; trashing keeps the pairing live until purge (the
-    job writes echoes into the trashed calendar — wasteful, not harmful; outbound
-    is idle since trashed calendars aren't editable; restore preserves the link).
-    Whether to also unlink/pause on `CalendarMovedToTrashEvent` is a genuine
-    product-design tension (the planning pass and the review disagreed) needing a
-    paired trash+restore design — deferred rather than rushed.
+    the create scope, and a near-zero-probability, non-destructive glitch (a stray
+    empty import calendar). Recommendation: fold a "don't `createCalendar` on a
+    failed events fetch" guard into the importer the next time that resolution path
+    is touched — it kills this ghost *and* any 404-ghost for free, rather than
+    building bespoke teardown locking.
   - Calendar **rename** propagation; **color** mirroring (modifies the shared
     `request()` + is lab-unverifiable); attendee/RSVP sync (large separate feature).
 

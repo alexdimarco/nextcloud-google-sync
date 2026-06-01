@@ -100,6 +100,21 @@ class EventMapMapper extends QBMapper {
 	}
 
 	/**
+	 * Drop EVERY event-map row for a calendar. Used when a calendar-level pairing
+	 * is torn down (disconnect / delete-both / permanent delete) so a later relink
+	 * starts clean: without this, the stale rows make the bootstrap classify each
+	 * event as an ECHO and the freshly-created Google calendar stays empty.
+	 *
+	 * Returns the number of rows removed.
+	 */
+	public function deleteForCalendar(int $ncCalId): int {
+		$qb = $this->db->getQueryBuilder();
+		$qb->delete($this->getTableName())
+			->where($qb->expr()->eq('nc_cal_id', $qb->createNamedParameter($ncCalId, IQueryBuilder::PARAM_INT)));
+		return $qb->executeStatement();
+	}
+
+	/**
 	 * Prune stale recurrence-instance siblings of one NC object: delete every
 	 * sibling row (recurrence_id <> '') whose token is NOT in $keepTokens. The
 	 * master row (recurrence_id = '') is never touched. An empty $keepTokens

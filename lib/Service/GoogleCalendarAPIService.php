@@ -1306,9 +1306,16 @@ class GoogleCalendarAPIService {
 	 * Google calendar.
 	 */
 	public function disconnectNcCalendar(string $userId, string $googleCalId): void {
+		// Resolve the NC calendar before dropping the map so we can also prune its
+		// event-map rows — otherwise a later relink would treat every event as an
+		// already-synced echo and the freshly-created Google calendar would stay empty.
+		$ncCalId = $this->calendarMapService->getNcCalIdForGoogleId($googleCalId);
 		$this->unregisterSyncCalendar($userId, $googleCalId);
 		$this->outboundReconcileService->setTwoWayEnabled($userId, $googleCalId, false);
 		$this->calendarMapService->removeByGoogleCalId($googleCalId);
+		if ($ncCalId !== null) {
+			$this->eventMapService->removeForCalendar($ncCalId);
+		}
 	}
 
 	/**
@@ -1347,15 +1354,22 @@ class GoogleCalendarAPIService {
 			);
 			return ['error' => 'Could not delete the Google calendar; nothing was changed. Please try again.'];
 		}
-		// Google calendar is gone — tear down sync + the NC side + the pairing.
+		// Google calendar is gone — tear down sync + the pairing, THEN the NC side.
 		$this->unregisterSyncCalendar($userId, $googleCalId);
 		$this->outboundReconcileService->setTwoWayEnabled($userId, $googleCalId, false);
+		// Drop the pairing (calendar map + event map) BEFORE the soft-delete so
+		// that (a) if the soft-delete throws, a later restore cannot resurrect a
+		// pairing pointing at the now-deleted Google calendar, and (b) the
+		// synchronous CalendarMovedToTrashEvent finds no map row and the lifecycle
+		// listener cleanly no-ops. Pruning the event-map rows lets a future relink
+		// push the events afresh instead of treating them as already-synced echoes.
+		$this->calendarMapService->removeByGoogleCalId($googleCalId);
+		$this->eventMapService->removeForCalendar($ncCalId);
 		// Soft-delete the NC calendar (recoverable from NC's calendar trash);
 		// skip if it is already trashed so we don't reset its retention clock.
 		if (($cal['{http://nextcloud.com/ns}deleted-at'] ?? null) === null) {
 			$this->caldavBackend->deleteCalendar($ncCalId);
 		}
-		$this->calendarMapService->removeByGoogleCalId($googleCalId);
 		$this->logger->info(
 			'Calendar Bridge: deleted linked calendars (NC ' . $ncCalUri . ' + Google ' . $googleCalId . ')',
 			['app' => Application::APP_ID],
