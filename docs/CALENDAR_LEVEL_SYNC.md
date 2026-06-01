@@ -225,25 +225,38 @@ Considerations:
   link-error rollback, delete-both. NOTE: the real `calendars.insert` success path
   needs a user reconnect (calendar.app.created) and so is exercised in production,
   not the lab.
-- **P-d — DEFERRED polish.** Calendar **rename** propagation; **color** mirroring
-  (calendarList.patch + hex→palette); attendee/RSVP sync (separate large feature);
-  Direction-B "Sync all" / unsynced-calendar badge. *(later)*
-  Plus these P-c adversarial-review findings, deferred as non-critical:
-  - *(MED)* A **permanently-Google-rejected event** in the bootstrap pins the
-    change token at `''` and forces a full-calendar rescan every tick (shares the
-    "permanent create failure wedges the token" semantics with the existing
-    two-way create path). Needs a bounded-retry / terminal-skip design.
-  - *(MED)* A cron import tick already **mid-flight** during a delete-both/disconnect
-    can resurrect an empty ghost import calendar (the teardown takes no import
-    flock). Fix: take the per-calendar flock for the teardown, or defer
-    `createCalendar` in the importer until ≥1 successful events page.
-  - *(LOW)* An NC calendar **deleted out-of-band** (Calendar app / occ) leaves a
-    dangling `calbridge_calendar_map` row + a registered job. Fix: a
-    `CalendarDeletedEvent` listener that prunes the row + unregisters the job
-    (needs a `deleteByNcCalId` on the mapper).
-  - *(LOW)* `showServerError` shows axios's generic status, not the server's
-    `{error: ...}` body — the actionable message is buried in the Details blob.
-    Fix: prefer `error.response?.data?.error` as the headline (helps all endpoints).
+- **P-d — polish. ✅ PARTLY DONE.** Shipped this slice (lab/build-verified):
+  - *(MED)* ✅ A **permanently-Google-rejected event** (a 400/422 malformed body)
+    no longer wedges the token: it is terminal (`SKIPPED_REJECTED`, advances the
+    token, logged, left one-way); 403/404/410/5xx/429 stay transient (hold +
+    retry). Covers EVERY outbound write path — flat create + flat update, recurring
+    master create + master PATCH, and the per-instance override/cancel/restore
+    (which now treat a permanent rejection like their 404/410 no-op so
+    `runInstanceDiff` does not bubble ERROR). *(The P-d adversarial review caught
+    that the first cut hardened only the two CREATE paths; the UPDATE/PATCH +
+    per-instance paths were then completed.)* Lab-verified: create 400→advance /
+    500→hold, and update 400→advance.
+  - *(LOW)* ✅ An NC calendar **deleted out-of-band** is cleaned up by a
+    `CalendarDeletedListener` on `CalendarDeletedEvent` (drops the map row,
+    unregisters the job, clears two-way; keeps the Google calendar). Lab-verified.
+  - *(LOW)* ✅ `showServerError` now surfaces the server's `{error: ...}` body as
+    the headline (falls back to the axios message), and **HTML-escapes** it (a
+    review-caught XSS: server/Google error bodies flowed into the isHTML toast).
+  - *(small)* ✅ Direction-B **"Sync all"** button + **"(not synced)"** marker.
+
+  Still DEFERRED:
+  - *(MED)* The mid-flight-cron-tick **ghost** on delete-both/disconnect teardown
+    (no import flock) — genuinely concurrency-tricky, can't be lab-verified without
+    the create scope; deserves its own design + adversarial review.
+  - **Soft-delete (trash) of a linked calendar.** Only `CalendarDeletedEvent`
+    (permanent purge) is handled; trashing keeps the pairing live until purge (the
+    job writes echoes into the trashed calendar — wasteful, not harmful; outbound
+    is idle since trashed calendars aren't editable; restore preserves the link).
+    Whether to also unlink/pause on `CalendarMovedToTrashEvent` is a genuine
+    product-design tension (the planning pass and the review disagreed) needing a
+    paired trash+restore design — deferred rather than rushed.
+  - Calendar **rename** propagation; **color** mirroring (modifies the shared
+    `request()` + is lab-unverifiable); attendee/RSVP sync (large separate feature).
 
 Each phase: branch off `main`, lab-verify on the sacrificial account, adversarial
 review workflow, PR, CI — the established cadence.
