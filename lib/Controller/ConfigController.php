@@ -43,6 +43,10 @@ class ConfigController extends Controller {
 	public const CALENDAR_EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
 	// Read-write events scope required for outbound (NC -> Google) sync.
 	public const CALENDAR_EVENTS_WRITE_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+	// Create + manage ONLY app-created calendars: required to create a Google
+	// calendar from a Nextcloud one (calendar-level NC -> Google sync). Minimal
+	// least-privilege scope — the app can never touch calendars it did not create.
+	public const CALENDAR_APP_CREATED_SCOPE = 'https://www.googleapis.com/auth/calendar.app.created';
 
 	// The only preferences a user may set through the generic setConfig
 	// endpoint. Everything else — user_scopes, token/refresh_token,
@@ -221,6 +225,7 @@ class ConfigController extends Controller {
 			'can_access_other_contacts' => in_array(self::CONTACTS_OTHER_SCOPE, $scopes) ? 1 : 0,
 			'can_access_calendar' => (in_array(self::CALENDAR_SCOPE, $scopes) && in_array(self::CALENDAR_EVENTS_SCOPE, $scopes)) ? 1 : 0,
 			'can_write_calendar' => in_array(self::CALENDAR_EVENTS_WRITE_SCOPE, $scopes) ? 1 : 0,
+			'can_create_calendar' => in_array(self::CALENDAR_APP_CREATED_SCOPE, $scopes) ? 1 : 0,
 		];
 
 		$this->config->setUserValue($this->userId, Application::APP_ID, 'user_scopes', json_encode($scopesArray));

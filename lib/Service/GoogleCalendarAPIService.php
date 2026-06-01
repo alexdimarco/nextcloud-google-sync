@@ -55,6 +55,7 @@ class GoogleCalendarAPIService {
 		private EventMapService $eventMapService,
 		private OutboundReconcileService $outboundReconcileService,
 		private MapVerifyService $mapVerifyService,
+		private CalendarMapService $calendarMapService,
 	) {
 		$this->utcTimezone = new DateTimeZone('-0000');
 	}
@@ -675,28 +676,42 @@ class GoogleCalendarAPIService {
 
 		$newCalName = trim($calName) . ' (' . $this->l10n->t('Google Calendar import') . ')';
 		$params['{DAV:}displayname'] = $newCalName;
-		// Use the Google calendar ID (stable across renames) as the CalDAV
-		// URI rather than the display name. Pre-Phase-2 calendars were
-		// created under urlencode(displayName) — fall back to that on lookup
-		// so existing installs keep working without a rename/migration.
-		$newCalUri = urlencode($calId);
 
-		$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $newCalUri);
-		if ($existing === null) {
-			$legacyUri = urlencode($newCalName);
-			$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $legacyUri);
-		}
-		$ncCalId = $existing['id'] ?? null;
-		$calendarIsNew = is_null($ncCalId);
-		if (is_null($ncCalId)) {
-			$ncCalId = $this->caldavBackend->createCalendar('principals/users/' . $userId, $newCalUri, $params);
-		} elseif (($existing['{DAV:}displayname'] ?? null) !== $newCalName) {
-			// Propagate a Google-side rename to the existing NC calendar.
-			// Skipped when the value hasn't changed so we don't churn
-			// CalDAV sync state on every tick.
-			$propPatch = new PropPatch(['{DAV:}displayname' => $newCalName]);
-			$this->caldavBackend->updateCalendar($ncCalId, $propPatch);
-			$propPatch->commit();
+		// Map-first resolution: an NC-ORIGINATED pairing links a PRE-EXISTING
+		// Nextcloud calendar (its own URI) to this Google calendar id. Use it
+		// directly and NEVER create or rename it — it is the user's own calendar.
+		// Falls through to the legacy "URI = urlencode(Google id)" scheme for
+		// Google-originated imports. The calendar map is empty until the
+		// NC -> Google create flow (P-c) populates it, so existing installs are
+		// unaffected.
+		$mappedNcCalId = $this->calendarMapService->getNcCalIdForGoogleId($calId);
+		if ($mappedNcCalId !== null) {
+			$ncCalId = $mappedNcCalId;
+			$calendarIsNew = false;
+		} else {
+			// Use the Google calendar ID (stable across renames) as the CalDAV
+			// URI rather than the display name. Pre-Phase-2 calendars were
+			// created under urlencode(displayName) — fall back to that on lookup
+			// so existing installs keep working without a rename/migration.
+			$newCalUri = urlencode($calId);
+
+			$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $newCalUri);
+			if ($existing === null) {
+				$legacyUri = urlencode($newCalName);
+				$existing = $this->caldavBackend->getCalendarByUri('principals/users/' . $userId, $legacyUri);
+			}
+			$ncCalId = $existing['id'] ?? null;
+			$calendarIsNew = is_null($ncCalId);
+			if (is_null($ncCalId)) {
+				$ncCalId = $this->caldavBackend->createCalendar('principals/users/' . $userId, $newCalUri, $params);
+			} elseif (($existing['{DAV:}displayname'] ?? null) !== $newCalName) {
+				// Propagate a Google-side rename to the existing NC calendar.
+				// Skipped when the value hasn't changed so we don't churn
+				// CalDAV sync state on every tick.
+				$propPatch = new PropPatch(['{DAV:}displayname' => $newCalName]);
+				$this->caldavBackend->updateCalendar($ncCalId, $propPatch);
+				$propPatch->commit();
+			}
 		}
 
 		/** @var Set<string> $unseenURIs */
