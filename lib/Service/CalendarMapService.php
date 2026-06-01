@@ -54,6 +54,29 @@ class CalendarMapService {
 	}
 
 	/**
+	 * 3-state origin probe for the reconciler bootstrap: TRUE = an NC-origin
+	 * pairing exists, FALSE = definitively no pairing (Google-origin), NULL = could
+	 * NOT be determined (transient DB error). The reconciler must NOT baseline-skip
+	 * on NULL — only on a confirmed FALSE — because a wrong baseline-skip would
+	 * permanently drop an NC-origin calendar's initial push (the null-vs-false
+	 * ambiguity in getNcCalIdForGoogleId is exactly that data-loss trap).
+	 */
+	public function hasNcOriginPairing(string $googleCalId): ?bool {
+		try {
+			$this->mapper->findByGoogleCalId($googleCalId);
+			return true;
+		} catch (DoesNotExistException) {
+			return false;
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: calendar-origin probe failed for google calendar ' . $googleCalId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return null;
+		}
+	}
+
+	/**
 	 * The Google calendar id linked to this NC calendar, or null. Used by the UI
 	 * to show whether an NC calendar is already paired. Defensive.
 	 */
@@ -76,13 +99,13 @@ class CalendarMapService {
 	 * an existing row for this NC calendar is updated, otherwise inserted.
 	 * Defensive: never throws.
 	 *
-	 * P-c TODO: this currently swallows a UNIQUE(google_cal_id) collision (the same
-	 * Google calendar already bound to a DIFFERENT NC calendar) and returns void, so
-	 * a caller gets no signal. When P-c wires the create flow it must either return a
-	 * success signal or handle the collision intentionally (the steal-vs-reject
-	 * semantics is a P-c product decision) — do NOT silently leave the old binding.
+	 * Returns true iff the row was persisted. The create flow rolls back the
+	 * just-created Google calendar when this returns false (e.g. a
+	 * UNIQUE(google_cal_id) collision — that Google calendar already bound to a
+	 * DIFFERENT NC calendar — or any DB error), so a failed pairing is never
+	 * silently left with a stale/foreign binding.
 	 */
-	public function recordNcOriginPairing(int $ncCalId, string $ncCalUri, string $googleCalId, int $createdAt): void {
+	public function recordNcOriginPairing(int $ncCalId, string $ncCalUri, string $googleCalId, int $createdAt): bool {
 		try {
 			try {
 				$row = $this->mapper->findByNcCalId($ncCalId);
@@ -99,11 +122,13 @@ class CalendarMapService {
 				$row->setCreatedAt($createdAt);
 				$this->mapper->insert($row);
 			}
+			return true;
 		} catch (Throwable $e) {
 			$this->logger->warning(
 				'Calendar Bridge: failed to record calendar pairing ' . $ncCalId . ' <-> ' . $googleCalId . ': ' . $e->getMessage(),
 				['app' => Application::APP_ID],
 			);
+			return false;
 		}
 	}
 

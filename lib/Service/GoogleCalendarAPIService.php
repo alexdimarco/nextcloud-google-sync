@@ -69,7 +69,13 @@ class GoogleCalendarAPIService {
 		if (isset($result['error']) || !isset($result['items'])) {
 			return $result;
 		}
-		return $result['items'];
+		// Hide NC-ORIGIN calendars (created from a Nextcloud calendar): they are
+		// managed from the "Your Nextcloud calendars" section, and showing them
+		// here too would let the Sync/Two-way toggles silently desync the pair.
+		return array_values(array_filter(
+			$result['items'],
+			fn (array $cal): bool => $this->calendarMapService->getNcCalIdForGoogleId((string)($cal['id'] ?? '')) === null,
+		));
 	}
 
 	/**
@@ -1169,6 +1175,203 @@ class GoogleCalendarAPIService {
 				return;
 			}
 		}
+	}
+
+	// ===================== Calendar-level NC -> Google sync (P-c) =====================
+
+	/**
+	 * Create a secondary Google calendar (requires the calendar.app.created scope).
+	 * @return array<string, mixed> the created calendar (with 'id') or ['error'=>...].
+	 */
+	public function createGoogleCalendar(string $userId, string $summary, ?string $timeZone = null): array {
+		$body = ['summary' => $summary];
+		if ($timeZone !== null && $timeZone !== '') {
+			$body['timeZone'] = $timeZone;
+		}
+		return $this->googleApiService->request($userId, 'calendar/v3/calendars', $body, 'POST');
+	}
+
+	/**
+	 * Delete a Google calendar (only ones the app created, under calendar.app.created).
+	 * @return array<string, mixed>
+	 */
+	public function deleteGoogleCalendar(string $userId, string $googleCalId): array {
+		return $this->googleApiService->request($userId, 'calendar/v3/calendars/' . urlencode($googleCalId), [], 'DELETE');
+	}
+
+	/**
+	 * The user's OWN Nextcloud calendars eligible for NC -> Google linking:
+	 * owned (not shared-in), not the birthday calendar, and not an app-created
+	 * Google-import calendar (those are managed in the Google list). Each entry
+	 * carries its current pairing status.
+	 *
+	 * @return list<array{ncCalId:int, uri:string, displayname:string, color:?string, isLinked:bool, googleCalId:?string}>
+	 */
+	public function getOwnNcCalendars(string $userId): array {
+		$principal = 'principals/users/' . $userId;
+		$importSuffix = ' (' . $this->l10n->t('Google Calendar import') . ')';
+		$out = [];
+		foreach ($this->caldavBackend->getCalendarsForUser($principal) as $cal) {
+			$owner = (string)($cal['{http://owncloud.org/ns}owner-principal'] ?? ($cal['principaluri'] ?? ''));
+			if ($owner !== $principal) {
+				continue; // shared-in, not owned
+			}
+			if (($cal['{http://nextcloud.com/ns}deleted-at'] ?? null) !== null) {
+				continue; // soft-deleted (in the calendar trash)
+			}
+			$uri = (string)($cal['uri'] ?? '');
+			$name = (string)($cal['{DAV:}displayname'] ?? $uri);
+			if ($uri === '' || $uri === 'contact_birthdays' || str_ends_with($name, $importSuffix)) {
+				continue;
+			}
+			$ncCalId = (int)($cal['id'] ?? 0);
+			$googleCalId = $this->calendarMapService->getGoogleCalIdForNcCalId($ncCalId);
+			$out[] = [
+				'ncCalId' => $ncCalId,
+				'uri' => $uri,
+				'displayname' => $name,
+				'color' => isset($cal['{http://apple.com/ns/ical/}calendar-color']) ? (string)$cal['{http://apple.com/ns/ical/}calendar-color'] : null,
+				'isLinked' => $googleCalId !== null,
+				'googleCalId' => $googleCalId,
+			];
+		}
+		return $out;
+	}
+
+	/**
+	 * Link an existing Nextcloud calendar to a NEWLY-created Google calendar and
+	 * enable two-way sync. The next reconcile bootstraps the initial outbound push
+	 * of this calendar's existing events (cap-and-drain). Idempotent: a calendar
+	 * that is already linked returns its existing pairing without creating a duplicate.
+	 *
+	 * @return array{googleCalId?:string, displayname?:string, alreadyLinked?:bool, error?:string}
+	 */
+	public function linkNcCalendarToGoogle(string $userId, string $ncCalUri): array {
+		$principal = 'principals/users/' . $userId;
+		$cal = $this->caldavBackend->getCalendarByUri($principal, $ncCalUri);
+		if ($cal === null) {
+			return ['error' => 'Calendar not found'];
+		}
+		$owner = (string)($cal['{http://owncloud.org/ns}owner-principal'] ?? ($cal['principaluri'] ?? ''));
+		if ($owner !== $principal) {
+			return ['error' => 'You do not own this calendar'];
+		}
+		if (($cal['{http://nextcloud.com/ns}deleted-at'] ?? null) !== null) {
+			return ['error' => 'This calendar is in the trash'];
+		}
+		$name = (string)($cal['{DAV:}displayname'] ?? $ncCalUri);
+		$importSuffix = ' (' . $this->l10n->t('Google Calendar import') . ')';
+		if ($ncCalUri === 'contact_birthdays' || str_ends_with($name, $importSuffix)) {
+			return ['error' => 'This calendar cannot be synced to Google'];
+		}
+		$ncCalId = (int)($cal['id'] ?? 0);
+		$existing = $this->calendarMapService->getGoogleCalIdForNcCalId($ncCalId);
+		if ($existing !== null) {
+			return ['googleCalId' => $existing, 'alreadyLinked' => true];
+		}
+
+		$timeZone = self::extractCalendarTimezone(
+			isset($cal['{urn:ietf:params:xml:ns:caldav}calendar-timezone']) ? (string)$cal['{urn:ietf:params:xml:ns:caldav}calendar-timezone'] : null
+		);
+		$color = isset($cal['{http://apple.com/ns/ical/}calendar-color']) ? (string)$cal['{http://apple.com/ns/ical/}calendar-color'] : null;
+
+		$created = $this->createGoogleCalendar($userId, $name, $timeZone);
+		$googleCalId = isset($created['id']) ? (string)$created['id'] : '';
+		if (isset($created['error']) || $googleCalId === '') {
+			$this->logger->warning(
+				'Calendar Bridge: could not create Google calendar for ' . $ncCalUri . ': ' . (string)($created['error'] ?? 'no id'),
+				['app' => Application::APP_ID],
+			);
+			return ['error' => 'Could not create the Google calendar'];
+		}
+
+		// Record the pairing; roll the Google calendar back if it fails (no orphan).
+		if (!$this->calendarMapService->recordNcOriginPairing($ncCalId, $ncCalUri, $googleCalId, time())) {
+			$this->deleteGoogleCalendar($userId, $googleCalId);
+			return ['error' => 'Could not link the calendars'];
+		}
+
+		$this->registerSyncCalendar($userId, $googleCalId, $name, $color);
+		$this->outboundReconcileService->setTwoWayEnabled($userId, $googleCalId, true);
+		$this->logger->info(
+			'Calendar Bridge: linked NC calendar ' . $ncCalUri . ' -> Google calendar ' . $googleCalId,
+			['app' => Application::APP_ID],
+		);
+		return ['googleCalId' => $googleCalId, 'displayname' => $name];
+	}
+
+	/**
+	 * Disconnect a linked pair: stop syncing + clear two-way, but KEEP both
+	 * calendars and their events (just unlinked). Re-linking re-creates a fresh
+	 * Google calendar.
+	 */
+	public function disconnectNcCalendar(string $userId, string $googleCalId): void {
+		$this->unregisterSyncCalendar($userId, $googleCalId);
+		$this->outboundReconcileService->setTwoWayEnabled($userId, $googleCalId, false);
+		$this->calendarMapService->removeByGoogleCalId($googleCalId);
+	}
+
+	/**
+	 * Destructive: delete BOTH the Google calendar (permanently — Google has no
+	 * calendar trash) and the Nextcloud calendar (to NC's calendar trash, so it
+	 * stays recoverable) of a linked pair. The caller must have confirmed.
+	 *
+	 * @return array{deleted?:bool, error?:string}
+	 */
+	public function deleteLinkedCalendars(string $userId, string $ncCalUri): array {
+		$principal = 'principals/users/' . $userId;
+		$cal = $this->caldavBackend->getCalendarByUri($principal, $ncCalUri);
+		if ($cal === null) {
+			return ['error' => 'Calendar not found'];
+		}
+		$owner = (string)($cal['{http://owncloud.org/ns}owner-principal'] ?? ($cal['principaluri'] ?? ''));
+		if ($owner !== $principal) {
+			return ['error' => 'You do not own this calendar'];
+		}
+		$ncCalId = (int)($cal['id'] ?? 0);
+		$googleCalId = $this->calendarMapService->getGoogleCalIdForNcCalId($ncCalId);
+		if ($googleCalId === null) {
+			return ['error' => 'This calendar is not linked'];
+		}
+		// Delete the Google calendar FIRST (the only externally-visible,
+		// irreversible step). If it fails for any reason OTHER than already-gone,
+		// abort with NOTHING changed — never trash the NC calendar + drop the
+		// mapping while the Google calendar survives (that would orphan it,
+		// un-deletable and un-relinkable from the UI).
+		$del = $this->deleteGoogleCalendar($userId, $googleCalId);
+		$status = $del['statusCode'] ?? null;
+		if (isset($del['error']) && $status !== 404 && $status !== 410) {
+			$this->logger->warning(
+				'Calendar Bridge: delete-both aborted — Google calendar delete failed for ' . $googleCalId . ': ' . (string)$del['error'],
+				['app' => Application::APP_ID],
+			);
+			return ['error' => 'Could not delete the Google calendar; nothing was changed. Please try again.'];
+		}
+		// Google calendar is gone — tear down sync + the NC side + the pairing.
+		$this->unregisterSyncCalendar($userId, $googleCalId);
+		$this->outboundReconcileService->setTwoWayEnabled($userId, $googleCalId, false);
+		// Soft-delete the NC calendar (recoverable from NC's calendar trash);
+		// skip if it is already trashed so we don't reset its retention clock.
+		if (($cal['{http://nextcloud.com/ns}deleted-at'] ?? null) === null) {
+			$this->caldavBackend->deleteCalendar($ncCalId);
+		}
+		$this->calendarMapService->removeByGoogleCalId($googleCalId);
+		$this->logger->info(
+			'Calendar Bridge: deleted linked calendars (NC ' . $ncCalUri . ' + Google ' . $googleCalId . ')',
+			['app' => Application::APP_ID],
+		);
+		return ['deleted' => true];
+	}
+
+	/** Best-effort IANA TZID from a CalDAV calendar-timezone VTIMEZONE blob. Pure. */
+	public static function extractCalendarTimezone(?string $vtimezone): ?string {
+		if ($vtimezone === null || $vtimezone === '') {
+			return null;
+		}
+		if (preg_match('/^TZID:(.+)$/m', $vtimezone, $m) === 1) {
+			return trim($m[1]);
+		}
+		return null;
 	}
 
 	/**

@@ -77,7 +77,8 @@ $fault = new class($realG) extends GoogleAPIService {
 };
 
 $ors = new OutboundRecurrenceService($be, $fault, $ems, $logger);
-$recon = new OutboundReconcileService($be, $mapper, $config, $logger, $ws, $ors);
+$cms = $c->get(\OCA\CalendarBridge\Service\CalendarMapService::class);
+$recon = new OutboundReconcileService($be, $mapper, $config, $logger, $ws, $ors, $cms);
 
 $tok = static fn (): string => $config->getUserValue($USER, 'outside_provider_calendar_bridge', 'nc_change_token_' . md5($CAL), '-');
 $ncEtag = static function () use ($ems, $NCCAL, $uid): string {

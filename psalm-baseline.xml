@@ -88,6 +88,10 @@
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
+      <code><![CDATA[$this->caldavBackend]]></code>
       <code><![CDATA[private]]></code>
     </MissingDependency>
     <UndefinedClass>

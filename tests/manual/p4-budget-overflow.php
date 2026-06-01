@@ -57,7 +57,8 @@ $ors = new class($be, $realG, $ems, $logger) extends OutboundRecurrenceService {
 		return 2;
 	}
 };
-$recon = new OutboundReconcileService($be, $mapper, $config, $logger, $ws, $ors);
+$cms = $c->get(\OCA\CalendarBridge\Service\CalendarMapService::class);
+$recon = new OutboundReconcileService($be, $mapper, $config, $logger, $ws, $ors, $cms);
 
 $tok = static fn (): string => $config->getUserValue($USER, 'outside_provider_calendar_bridge', 'nc_change_token_' . md5($CAL), '-');
 
