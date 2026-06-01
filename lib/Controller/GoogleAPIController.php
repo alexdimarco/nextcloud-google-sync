@@ -251,6 +251,88 @@ class GoogleAPIController extends Controller {
 		return new DataResponse(['calId' => $calId, 'isTwoWayEnabled' => $desiredState]);
 	}
 
+	// ============ Calendar-level NC -> Google sync (P-c) ============
+
+	/**
+	 * List the user's own Nextcloud calendars eligible for NC -> Google linking.
+	 *
+	 * @NoAdminRequired
+	 *
+	 * @return DataResponse
+	 */
+	public function getNcCalendarList(): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse([], 400);
+		}
+		return new DataResponse($this->googleCalendarAPIService->getOwnNcCalendars($this->userId));
+	}
+
+	/**
+	 * Create a Google calendar from a Nextcloud one and enable two-way sync.
+	 * Requires BOTH the calendar.app.created (create) and calendar.events (write)
+	 * scopes — defense in depth (the UI also gates the button).
+	 *
+	 * @NoAdminRequired
+	 *
+	 * @param string $ncCalUri
+	 * @return DataResponse
+	 */
+	public function syncNcCalendarToGoogle(string $ncCalUri): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse('', 400);
+		}
+		if (!$this->hasCreateScope() || !$this->outboundReconcileService->hasWriteScope($this->userId)) {
+			return new DataResponse(
+				['error' => 'The calendar-create and read-write scopes are not both granted; reconnect your Google account to enable this.'],
+				403,
+			);
+		}
+		$result = $this->googleCalendarAPIService->linkNcCalendarToGoogle($this->userId, $ncCalUri);
+		return new DataResponse($result, isset($result['error']) ? 400 : 200);
+	}
+
+	/**
+	 * Disconnect a linked pair (stop syncing; KEEP both calendars).
+	 *
+	 * @NoAdminRequired
+	 *
+	 * @param string $googleCalId
+	 * @return DataResponse
+	 */
+	public function disconnectNcCalendar(string $googleCalId): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse('', 400);
+		}
+		$this->googleCalendarAPIService->disconnectNcCalendar($this->userId, $googleCalId);
+		return new DataResponse(['disconnected' => true]);
+	}
+
+	/**
+	 * DESTRUCTIVE: delete BOTH the Nextcloud and Google calendar of a linked pair.
+	 * The caller (UI) must have confirmed.
+	 *
+	 * @NoAdminRequired
+	 *
+	 * @param string $ncCalUri
+	 * @return DataResponse
+	 */
+	public function deleteLinkedCalendars(string $ncCalUri): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse('', 400);
+		}
+		$result = $this->googleCalendarAPIService->deleteLinkedCalendars($this->userId, $ncCalUri);
+		return new DataResponse($result, isset($result['error']) ? 400 : 200);
+	}
+
+	/** Whether the user granted the calendar.app.created scope. */
+	private function hasCreateScope(): bool {
+		if ($this->userId === null) {
+			return false;
+		}
+		$scopes = json_decode($this->config->getUserValue($this->userId, Application::APP_ID, 'user_scopes', '{}'), true);
+		return is_array($scopes) && ($scopes['can_create_calendar'] ?? 0) === 1;
+	}
+
 	/**
 	 * @return DataResponse
 	 */

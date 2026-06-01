@@ -5,8 +5,8 @@
 
 # Design: Calendar-level sync (create a Google calendar from a Nextcloud one)
 
-**Status: PROPOSAL — not implemented. This document is the review gate; no code
-lands until it is approved.**
+**Status: IMPLEMENTED (P-a, P-b, P-c shipped). P-d polish remains deferred.**
+This document was the design/review gate; the phased plan in §7 tracks status.
 
 Today the app syncs *events* within calendars that originate on Google. This
 proposal adds the missing direction at the **calendar** level: take an existing
@@ -211,22 +211,39 @@ Considerations:
 
 ## 7. Phased plan
 
-- **P-a — OAuth scope plumbing.** Add `calendar.app.created` to requested scopes +
-  the `can_create_calendar` flag + re-consent hint. No behaviour yet. *(S)*
-- **P-b — Calendar map + resolution seam.** New `calbridge_calendar_map` table +
-  migration + mapper; `importCalendar`/reconcile resolve `ncCalId` map-first with
-  legacy fallback. Fully backward-compatible; existing calendars unaffected.
-  Lab-verify no regression on Google-originated calendars. *(M — the core refactor)*
-- **P-c — NC→Google create flow + UI.** `calendars.insert` wrapper (name +
-  timezone); the `/sync-nc-calendar` endpoint + service (create Y, map, register,
-  enable two-way, cap-and-drain bootstrap push); the "Your Nextcloud calendars"
-  settings list + button; the un-sync controls (**Disconnect** + confirmed **Delete
-  both calendars**) and the hand-deleted-`Y` 404 handler. Lab-verify end-to-end +
-  adversarial review (echo loop, initial-push idempotency, retry-no-duplicate,
-  delete-both confirmation). *(M)*
+- **P-a — OAuth scope plumbing. ✅ DONE (#25).** `calendar.app.created` requested +
+  `can_create_calendar` flag derived in the OAuth redirect (forge-proof).
+- **P-b — Calendar map + resolution seam. ✅ DONE (#25).** `calbridge_calendar_map`
+  table + map-first `importCalendar`/reconcile resolution with legacy fallback;
+  lab-verified no regression on Google-originated calendars.
+- **P-c — NC→Google create flow + UI. ✅ DONE.** `calendars.insert/delete` wrappers
+  (name + timezone); `linkNcCalendarToGoogle` (create Y, map w/ rollback, register,
+  enable two-way) + the cap-and-drain bootstrap in the reconciler; the controller
+  endpoints + routes; the "Your Nextcloud calendars" settings UI with **Create in
+  Google + sync**, **Disconnect**, and confirmed **Delete both calendars**.
+  Lab-verified: cap-and-drain bootstrap (2→4→5, held→drained), scope gate, clean
+  link-error rollback, delete-both. NOTE: the real `calendars.insert` success path
+  needs a user reconnect (calendar.app.created) and so is exercised in production,
+  not the lab.
 - **P-d — DEFERRED polish.** Calendar **rename** propagation; **color** mirroring
   (calendarList.patch + hex→palette); attendee/RSVP sync (separate large feature);
   Direction-B "Sync all" / unsynced-calendar badge. *(later)*
+  Plus these P-c adversarial-review findings, deferred as non-critical:
+  - *(MED)* A **permanently-Google-rejected event** in the bootstrap pins the
+    change token at `''` and forces a full-calendar rescan every tick (shares the
+    "permanent create failure wedges the token" semantics with the existing
+    two-way create path). Needs a bounded-retry / terminal-skip design.
+  - *(MED)* A cron import tick already **mid-flight** during a delete-both/disconnect
+    can resurrect an empty ghost import calendar (the teardown takes no import
+    flock). Fix: take the per-calendar flock for the teardown, or defer
+    `createCalendar` in the importer until ≥1 successful events page.
+  - *(LOW)* An NC calendar **deleted out-of-band** (Calendar app / occ) leaves a
+    dangling `calbridge_calendar_map` row + a registered job. Fix: a
+    `CalendarDeletedEvent` listener that prunes the row + unregisters the job
+    (needs a `deleteByNcCalId` on the mapper).
+  - *(LOW)* `showServerError` shows axios's generic status, not the server's
+    `{error: ...}` body — the actionable message is buried in the Details blob.
+    Fix: prefer `error.response?.data?.error` as the headline (helps all endpoints).
 
 Each phase: branch off `main`, lab-verify on the sacrificial account, adversarial
 review workflow, PR, CI — the established cadence.

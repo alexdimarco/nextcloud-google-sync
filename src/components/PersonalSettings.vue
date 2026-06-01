@@ -124,6 +124,43 @@
 					</div>
 					<br>
 				</div>
+				<div v-if="connected && state.user_scopes.can_access_calendar"
+					id="cb-nc-calendars">
+					<h3>{{ t('outside_provider_calendar_bridge', 'Your Nextcloud calendars') }}</h3>
+					<p class="cb-hint">
+						{{ t('outside_provider_calendar_bridge', 'Create a matching Google calendar from one of your Nextcloud calendars and keep them in two-way sync.') }}
+					</p>
+					<p v-if="!state.user_scopes.can_create_calendar || !state.user_scopes.can_write_calendar" class="cb-hint">
+						{{ t('outside_provider_calendar_bridge', 'Reconnect your Google account to enable creating Google calendars (needs calendar create + write access).') }}
+					</p>
+					<div v-for="nc in ncCalendars" :key="nc.uri" class="calendar-item">
+						<label>
+							<NcAppNavigationIconBullet v-if="nc.color" :color="nc.color.replace('#', '')" />
+							<span>{{ nc.displayname }}</span>
+						</label>
+						<NcButton v-if="!nc.isLinked"
+							:class="{ loading: loadingNcLink[nc.uri] }"
+							:disabled="!state.user_scopes.can_create_calendar || !state.user_scopes.can_write_calendar || !!loadingNcLink[nc.uri]"
+							@click="onLinkNcCalendar(nc)">
+							{{ t('outside_provider_calendar_bridge', 'Create in Google + sync') }}
+						</NcButton>
+						<template v-else>
+							<span class="cb-hint">{{ t('outside_provider_calendar_bridge', 'Linked & syncing') }}</span>
+							<NcButton :disabled="!!loadingNcLink[nc.uri]" @click="onDisconnectNcCalendar(nc)">
+								{{ t('outside_provider_calendar_bridge', 'Disconnect') }}
+							</NcButton>
+							<NcButton type="error"
+								:disabled="!!loadingNcLink[nc.uri]"
+								@click="onDeleteBoth(nc)">
+								{{ t('outside_provider_calendar_bridge', 'Delete both calendars') }}
+							</NcButton>
+						</template>
+					</div>
+					<p v-if="ncCalendars.length === 0" class="cb-hint">
+						{{ t('outside_provider_calendar_bridge', 'No eligible Nextcloud calendars to sync.') }}
+					</p>
+					<br>
+				</div>
 				<div v-if="showDrive"
 					id="google-drive">
 					<h3>{{ t('outside_provider_calendar_bridge', 'Drive') }}</h3>
@@ -286,6 +323,9 @@ export default {
 			importingCalendar: {},
 			loadingSyncCalendar: {},
 			loadingTwoWay: {},
+			// NC -> Google calendar-level sync
+			ncCalendars: [],
+			loadingNcLink: {},
 			// contacts
 			considerOtherContacts: false,
 			addressbooks: [],
@@ -369,6 +409,7 @@ export default {
 			if (this.showOAuth && this.connected) {
 				if (this.state.user_scopes.can_access_calendar) {
 					this.getGoogleCalendarList()
+					this.getNcCalendarList()
 					this.getLocalAddressBooks()
 				}
 				if (this.state.user_scopes.can_access_contacts) {
@@ -494,6 +535,73 @@ export default {
 						error,
 						t('outside_provider_calendar_bridge', 'Failed to get calendar list'),
 					)
+				})
+		},
+		getNcCalendarList() {
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/nc-calendars')
+			axios.get(url)
+				.then((response) => {
+					this.ncCalendars = response.data || []
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to get Nextcloud calendar list'))
+				})
+		},
+		onLinkNcCalendar(nc) {
+			this.loadingNcLink[nc.uri] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/sync-nc-calendar')
+			axios.post(url, { ncCalUri: nc.uri })
+				.then(() => {
+					showSuccess(t('outside_provider_calendar_bridge', 'Created in Google and syncing'))
+					this.getNcCalendarList()
+					this.getGoogleCalendarList()
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to create the Google calendar'))
+				})
+				.finally(() => {
+					this.loadingNcLink[nc.uri] = false
+				})
+		},
+		onDisconnectNcCalendar(nc) {
+			this.loadingNcLink[nc.uri] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/disconnect-nc-calendar')
+			axios.post(url, { googleCalId: nc.googleCalId })
+				.then(() => {
+					showSuccess(t('outside_provider_calendar_bridge', 'Disconnected (both calendars kept)'))
+					this.getNcCalendarList()
+					this.getGoogleCalendarList()
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to disconnect'))
+				})
+				.finally(() => {
+					this.loadingNcLink[nc.uri] = false
+				})
+		},
+		onDeleteBoth(nc) {
+			// eslint-disable-next-line no-alert
+			const ok = window.confirm(
+				t('outside_provider_calendar_bridge',
+					'Delete BOTH the Nextcloud calendar "{name}" and its Google calendar? The Google calendar is removed permanently; the Nextcloud one goes to the calendar trash.',
+					{ name: nc.displayname }),
+			)
+			if (!ok) {
+				return
+			}
+			this.loadingNcLink[nc.uri] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/linked-calendars')
+			axios.delete(url, { params: { ncCalUri: nc.uri } })
+				.then(() => {
+					showSuccess(t('outside_provider_calendar_bridge', 'Deleted both calendars'))
+					this.getNcCalendarList()
+					this.getGoogleCalendarList()
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to delete calendars'))
+				})
+				.finally(() => {
+					this.loadingNcLink[nc.uri] = false
 				})
 		},
 		getCalendarLabel(cal) {

@@ -262,4 +262,20 @@ class GoogleCalendarAPIServiceHelpersTest extends TestCase {
 			]])
 		);
 	}
+
+	// ---------- extractCalendarTimezone (P-c: name+timezone on calendars.insert) ----------
+
+	public function testExtractCalendarTimezonePullsTzidFromVtimezone(): void {
+		$vt = "BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nTZID:America/New_York\r\nEND:VTIMEZONE\r\nEND:VCALENDAR";
+		$this->assertSame('America/New_York', GoogleCalendarAPIService::extractCalendarTimezone($vt));
+	}
+
+	public function testExtractCalendarTimezoneNullAndEmptyReturnNull(): void {
+		$this->assertNull(GoogleCalendarAPIService::extractCalendarTimezone(null));
+		$this->assertNull(GoogleCalendarAPIService::extractCalendarTimezone(''));
+	}
+
+	public function testExtractCalendarTimezoneNoTzidLineReturnsNull(): void {
+		$this->assertNull(GoogleCalendarAPIService::extractCalendarTimezone("BEGIN:VCALENDAR\nEND:VCALENDAR"));
+	}
 }

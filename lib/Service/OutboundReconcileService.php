@@ -50,7 +50,19 @@ class OutboundReconcileService {
 		private LoggerInterface $logger,
 		private OutboundWriteService $writeService,
 		private OutboundRecurrenceService $recurrenceService,
+		private CalendarMapService $calendarMapService,
 	) {
+	}
+
+	/**
+	 * Max NC->Google event CREATES per reconcile tick (a circuit breaker for the
+	 * initial bulk push when an NC-originated calendar is first linked). A method
+	 * (not a const) so a lab/manual test can subclass + lower it. Steady-state
+	 * two-way never approaches this (a user makes a handful of new events per tick),
+	 * so it only bites the bootstrap, which drains over ticks (cap-and-drain).
+	 */
+	protected function createBudget(): int {
+		return 50;
 	}
 
 	public function isTwoWayEnabled(string $userId, string $calId): bool {
@@ -163,9 +175,29 @@ class OutboundReconcileService {
 			$tokenKey = $this->changeTokenKey($calId);
 			$stored = $this->config->getUserValue($userId, Application::APP_ID, $tokenKey, '');
 
-			if ($stored === '') {
-				// First run: baseline at the current token without classifying
-				// the initial full set (all already-imported events).
+			// An NC-ORIGINATED pairing links a pre-existing NC calendar to a freshly
+			// created (empty) Google calendar, so its existing events are genuinely
+			// local and MUST be pushed — the opposite of a Google-origin calendar,
+			// whose initial set are imported echoes to be skipped. The origin probe
+			// is 3-state: a transient lookup ERROR returns null, which must NEVER be
+			// treated as "Google-origin" (baseline-skip) — that would permanently
+			// drop the bootstrap.
+			$origin = $this->calendarMapService->hasNcOriginPairing($calId);
+
+			if ($stored === '' && $origin === null) {
+				// First run, but the calendar's origin could not be determined
+				// (transient DB error). Hold — persist NO baseline — so the next
+				// tick re-resolves and an NC-origin calendar still sees the full set.
+				$this->logger->warning(
+					'Calendar Bridge reconcile: could not determine origin for calendar ' . $ncCalId
+						. '; deferring the first-run baseline to the next tick',
+					['app' => Application::APP_ID],
+				);
+				return;
+			}
+			if ($stored === '' && $origin === false) {
+				// Confirmed Google-origin first run: baseline at the current token
+				// without classifying the initial full set (already-imported events).
 				$changes = $this->caldavBackend->getChangesForCalendar($ncCalId, '', 1);
 				$token = (string)(($changes['syncToken'] ?? '') ?: '');
 				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
@@ -175,6 +207,10 @@ class OutboundReconcileService {
 				);
 				return;
 			}
+			// NC-origin first run ($stored=''): fall through and process the FULL
+			// calendar (getChangesForCalendar from '' yields every object as 'added'
+			// -> each has no map row -> LOCAL_NEW -> pushed to the new Google
+			// calendar), bounded by createBudget() and drained over ticks.
 
 			$changes = $this->caldavBackend->getChangesForCalendar($ncCalId, $stored, 1);
 
@@ -206,12 +242,23 @@ class OutboundReconcileService {
 			// hits 409 -> DUPLICATE_ADOPTED (no duplicate).
 			$advance = true;
 			$counts = [];
+			$created = 0;
+			$createCapHit = false;
 			foreach (['added', 'modified'] as $type) {
 				foreach (($changes[$type] ?? []) as $uri) {
 					$uri = (string)$uri;
 					$cls = $this->classifyOne($ncCalId, $type, $uri);
 					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
 					if ($cls === self::LOCAL_NEW && $canWrite) {
+						if ($created >= $this->createBudget()) {
+							// Per-tick create cap reached (the initial bulk push of a
+							// newly-linked NC calendar): hold the token and drain the
+							// rest next tick — already-created events read as ECHO then,
+							// so it converges. Steady-state never reaches this.
+							$advance = false;
+							$createCapHit = true;
+							continue;
+						}
 						// Phase 2b/4: create a Nextcloud-originated event in Google —
 						// a recurring SERIES routes to the recurrence differ, a flat
 						// event to the single-event writer.
@@ -221,6 +268,7 @@ class OutboundReconcileService {
 						if ($status === OutboundWriteService::ERROR || $status === OutboundWriteService::CONFLICT) {
 							$advance = false;
 						}
+						$created++;
 						$this->logger->info(
 							'Calendar Bridge: outbound create ' . $uri . ' on calendar ' . $ncCalId . ' -> ' . $status,
 							['app' => Application::APP_ID],
@@ -271,6 +319,14 @@ class OutboundReconcileService {
 						['app' => Application::APP_ID],
 					);
 				}
+			}
+
+			if ($createCapHit) {
+				$this->logger->info(
+					'Calendar Bridge reconcile calendar ' . $ncCalId . ': hit the per-tick create cap ('
+						. $this->createBudget() . '); the rest of the initial set will push on the next tick',
+					['app' => Application::APP_ID],
+				);
 			}
 
 			if ($advance) {
