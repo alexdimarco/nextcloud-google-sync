@@ -82,14 +82,20 @@ class OutboundReconcileService {
 	 * the token so nothing replays. A future phase that activates LOCAL_EDIT/
 	 * LOCAL_DELETE writes must revisit pruning/re-baselining these rows.
 	 */
-	public function setTwoWayEnabled(string $userId, string $calId, bool $enabled): void {
+	public function setTwoWayEnabled(string $userId, string $calId, bool $enabled, bool $resetToken = true): void {
 		if ($enabled) {
 			$this->config->setUserValue($userId, Application::APP_ID, $this->twoWayKey($calId), '1');
 		} else {
 			$this->config->deleteUserValue($userId, Application::APP_ID, $this->twoWayKey($calId));
 		}
-		// Force a fresh baseline next reconcile either way.
-		$this->config->deleteUserValue($userId, Application::APP_ID, $this->changeTokenKey($calId));
+		// Force a fresh baseline next reconcile, EXCEPT when the caller is merely
+		// pausing/resuming (trash/restore): there we must PRESERVE the token so a
+		// LOCAL_DELETE queued before the pause is still visible in the change feed
+		// on resume — a from-'' rebaseline lists only live objects and would
+		// silently drop the pending delete (orphaning the Google event).
+		if ($resetToken) {
+			$this->config->deleteUserValue($userId, Application::APP_ID, $this->changeTokenKey($calId));
+		}
 	}
 
 	/**

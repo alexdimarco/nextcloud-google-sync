@@ -352,6 +352,23 @@ class EventMapService {
 	}
 
 	/**
+	 * Drop EVERY mapping row for a calendar. Called when a calendar-level pairing
+	 * is torn down (disconnect / delete-both / permanent delete) so a later relink
+	 * pushes its events afresh instead of treating them as already-synced echoes.
+	 * NOT called on a trash/pause — there the rows must survive so resume is clean.
+	 */
+	public function removeForCalendar(int $ncCalId): void {
+		try {
+			$this->mapper->deleteForCalendar($ncCalId);
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: failed to remove event map rows for calendar ' . $ncCalId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+		}
+	}
+
+	/**
 	 * One-time lazy backfill: if a calendar has no mapping rows yet, seed a
 	 * master row for each existing imported NC object so the steady-state
 	 * sync (which skips unchanged events and would never record them) starts

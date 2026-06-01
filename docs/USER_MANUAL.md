@@ -117,6 +117,12 @@ Two controls appear once a calendar is linked:
   Google calendar permanently and moves the Nextcloud one to your calendar trash
   (recoverable from there).
 
+If you simply **delete a linked Nextcloud calendar the normal way** (it moves to
+the calendar trash), syncing for it is **paused** while it sits in the trash — the
+Google calendar is left untouched. **Restore** it from the trash and syncing
+resumes automatically. Only when the trash is finally emptied (the calendar is
+permanently removed) is the link dropped for good.
+
 As with the other direction, **event details sync but guest lists (attendees) do
 not**, and only calendars you own can be synced this way.
 

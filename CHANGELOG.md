@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.7.0]
+
+### Added
+
+- **Trashing a linked calendar now pauses its sync instead of leaving it
+  running.** When a Nextcloud calendar that is linked to Google is soft-deleted
+  (the normal Calendar-app delete, which moves it to the trash), its background
+  import job is unregistered and two-way sync is turned off — but the link is
+  kept. Previously the job kept running for the whole ~30-day trash-retention
+  window, importing into an invisible calendar.
+- **Restoring a trashed linked calendar resumes its sync** automatically
+  (re-registers the job + re-enables two-way). Because the per-event mapping
+  survives trashing, nothing is re-pushed or duplicated on resume.
+
 ## [4.6.0]
 
 ### Added

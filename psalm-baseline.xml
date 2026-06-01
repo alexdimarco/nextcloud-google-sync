@@ -7,6 +7,8 @@
     </MissingOverrideAttribute>
     <UndefinedClass>
       <code><![CDATA[CalendarDeletedEvent]]></code>
+      <code><![CDATA[CalendarMovedToTrashEvent]]></code>
+      <code><![CDATA[CalendarRestoredEvent]]></code>
     </UndefinedClass>
   </file>
   <file src="lib/BackgroundJob/ImportDriveJob.php">
@@ -14,7 +16,7 @@
       <code><![CDATA[public function run($argument) {]]></code>
     </MissingOverrideAttribute>
   </file>
-  <file src="lib/Listener/CalendarDeletedListener.php">
+  <file src="lib/Listener/CalendarPairingListener.php">
     <UndefinedClass>
       <code><![CDATA[CalendarDeletedEvent]]></code>
     </UndefinedClass>

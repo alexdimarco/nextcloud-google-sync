@@ -10,9 +10,11 @@
 
 namespace OCA\CalendarBridge\AppInfo;
 
-use OCA\CalendarBridge\Listener\CalendarDeletedListener;
+use OCA\CalendarBridge\Listener\CalendarPairingListener;
 use OCA\CalendarBridge\Notification\Notifier;
 use OCA\DAV\Events\CalendarDeletedEvent;
+use OCA\DAV\Events\CalendarMovedToTrashEvent;
+use OCA\DAV\Events\CalendarRestoredEvent;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
@@ -30,9 +32,12 @@ class Application extends App implements IBootstrap {
 
 	public function register(IRegistrationContext $context): void {
 		$context->registerNotifierService(Notifier::class);
-		// Clean up a calendar-level pairing if the NC calendar is deleted
-		// out-of-band (Calendar app / occ / account removal).
-		$context->registerEventListener(CalendarDeletedEvent::class, CalendarDeletedListener::class);
+		// Keep a calendar-level pairing in step with its NC calendar's lifecycle
+		// when acted on out-of-band: delete -> unlink, trash -> pause (keep the
+		// link), restore -> resume. The Google calendar is never deleted here.
+		$context->registerEventListener(CalendarDeletedEvent::class, CalendarPairingListener::class);
+		$context->registerEventListener(CalendarMovedToTrashEvent::class, CalendarPairingListener::class);
+		$context->registerEventListener(CalendarRestoredEvent::class, CalendarPairingListener::class);
 	}
 
 	public function boot(IBootContext $context): void {
