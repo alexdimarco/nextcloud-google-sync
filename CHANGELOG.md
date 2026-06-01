@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.4.0]
+
+### Added
+
+- Groundwork for **calendar-level sync** (create a Google calendar from a
+  Nextcloud one — see `docs/CALENDAR_LEVEL_SYNC.md`): a `calbridge_calendar_map`
+  table + a map-first calendar-resolution seam in the importer (backward-compatible
+  — existing Google-originated calendars are unaffected), and the
+  `calendar.app.created` OAuth scope is now requested (granted on reconnect; least
+  privilege — the app can only manage calendars it creates). **No user-facing
+  change yet** — the NC → Google create flow lands in a later release.
+
 ## [4.3.0]
 
 ### Added
