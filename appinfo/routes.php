@@ -24,6 +24,11 @@ return [
 		['name' => 'googleAPI#registerSyncCalendar', 'url' => '/sync-calendar', 'verb' => 'GET'],
 		['name' => 'googleAPI#setSyncCalendar', 'url' => '/set-sync-calendar', 'verb' => 'GET'],
 		['name' => 'googleAPI#setTwoWaySync', 'url' => '/set-two-way-sync', 'verb' => 'GET'],
+		// Calendar-level NC -> Google sync (P-c)
+		['name' => 'googleAPI#getNcCalendarList', 'url' => '/nc-calendars', 'verb' => 'GET'],
+		['name' => 'googleAPI#syncNcCalendarToGoogle', 'url' => '/sync-nc-calendar', 'verb' => 'POST'],
+		['name' => 'googleAPI#disconnectNcCalendar', 'url' => '/disconnect-nc-calendar', 'verb' => 'POST'],
+		['name' => 'googleAPI#deleteLinkedCalendars', 'url' => '/linked-calendars', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#resetRegisteredSyncCalendar', 'url' => '/reset-sync-calendar', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#importContacts', 'url' => '/import-contacts', 'verb' => 'GET'],
 		['name' => 'googleAPI#importDrive', 'url' => '/import-files', 'verb' => 'GET'],
