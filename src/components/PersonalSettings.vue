@@ -86,13 +86,19 @@
 						<label class="cb-hint">
 							{{ t('outside_provider_calendar_bridge', 'Continuously sync your Google contacts into a Nextcloud address book (Google → Nextcloud):') }}
 						</label>
-						<NcCheckboxRadioSwitch v-for="ab in ncAddressBooks"
-							:key="ab.id"
-							:model-value="ab.isSyncEnabled"
-							:loading="loadingSyncContacts[ab.id]"
-							@update:model-value="onSyncContactsChange(ab)">
-							{{ ab.displayname }}
-						</NcCheckboxRadioSwitch>
+						<div v-for="ab in ncAddressBooks" :key="ab.id" class="line">
+							<NcCheckboxRadioSwitch
+								:model-value="ab.isSyncEnabled"
+								:loading="loadingSyncContacts[ab.id]"
+								@update:model-value="onSyncContactsChange(ab)">
+								{{ ab.displayname }}
+							</NcCheckboxRadioSwitch>
+							<NcButton :class="{ loading: dedupingContacts[ab.id] }"
+								:disabled="!!dedupingContacts[ab.id]"
+								@click="onDedupeContacts(ab)">
+								{{ t('outside_provider_calendar_bridge', 'Remove duplicates') }}
+							</NcButton>
+						</div>
 					</div>
 				</div>
 				<div v-if="calendars.length > 0">
@@ -250,6 +256,7 @@ export default {
 			// continuous contacts sync (Google -> NC)
 			ncAddressBooks: [],
 			loadingSyncContacts: {},
+			dedupingContacts: {},
 		}
 	},
 
@@ -553,6 +560,21 @@ export default {
 				})
 				.finally(() => {
 					this.loadingSyncContacts[ab.id] = false
+				})
+		},
+		onDedupeContacts(ab) {
+			this.dedupingContacts[ab.id] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/dedupe-contacts')
+			axios.post(url, { addressBookId: ab.id })
+				.then((response) => {
+					const removed = (response.data && response.data.removed) ? response.data.removed : 0
+					showSuccess(t('outside_provider_calendar_bridge', 'Removed {count} duplicate contact(s)', { count: removed }))
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to remove duplicate contacts'))
+				})
+				.finally(() => {
+					this.dedupingContacts[ab.id] = false
 				})
 		},
 		getLocalAddressBooks() {

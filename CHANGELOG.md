@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.11.0]
+
+### Added
+
+- **Contact de-duplication (Track 2, C1).** A **"Remove duplicates"** button
+  next to each address book (in the **Contacts** section) collapses leftover
+  duplicate contacts — most commonly cards that existed in an address book
+  *before* you turned on contacts sync, which sync then re-created. It is
+  deliberately conservative: it removes a stray card **only** when it is a
+  high-confidence duplicate of exactly one Google-synced contact (same name
+  **and** a shared email address), never touches a synced card, and leaves
+  ambiguous or low-confidence matches alone. Removed cards go to the Contacts
+  trash (recoverable). New duplicates are already prevented by the sync's
+  identity map.
+
 ## [4.10.0]
 
 ### Added
