@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.10.0]
+
+### Added
+
+- **Continuous Google → Nextcloud contacts sync (Track 2, C0).** A new
+  per-address-book **"Sync contacts"** toggle (in the **Contacts** section) keeps
+  a Nextcloud address book continuously in sync with your Google contacts via a
+  background job. Unlike the one-time **Import** button, it pulls only the
+  incremental changes each run (using a People-API sync token) and — for the
+  first time — also applies **Google-side deletions** to your Nextcloud cards.
+  Edits use last-writer-wins (ties → Nextcloud), and the identity map prevents
+  duplicates (including across a sync-token expiry / full resync). Inbound only
+  for now; pushing Nextcloud changes back to Google comes in a later phase.
+
 ## [4.9.0]
 
 ### Added

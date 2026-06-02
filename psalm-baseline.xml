@@ -112,44 +112,32 @@
     </UndefinedDocblockClass>
   </file>
   <file src="lib/Service/GoogleContactsAPIService.php">
+    <InvalidArrayOffset>
+      <code><![CDATA[$group['formattedName']]]></code>
+    </InvalidArrayOffset>
+    <InvalidReturnStatement>
+      <code><![CDATA[['nbSeen' => $seen, 'nbCreated' => $created, 'nbUpdated' => $updated, 'nbDeleted' => $deleted, 'nbEcho' => $echo, 'advanced' => $advance]]]></code>
+    </InvalidReturnStatement>
+    <InvalidReturnType>
+      <code><![CDATA[array{error?: mixed, nbSeen?: int, nbCreated?: int, nbUpdated?: int, nbDeleted?: int, nbEcho?: int}]]></code>
+    </InvalidReturnType>
     <UndefinedClass>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
-      <code><![CDATA[$vCard]]></code>
+      <code><![CDATA[VCard]]></code>
       <code><![CDATA[VCard]]></code>
       <code><![CDATA[private]]></code>
     </UndefinedClass>
