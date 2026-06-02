@@ -48,6 +48,10 @@ class GoogleContactsAPIService {
 	public const SKIPPED_GONE = 'skipped_gone';
 	public const SKIPPED_REJECTED = 'skipped_rejected';
 	public const ERROR = 'error';
+	// C2b outbound UPDATE/DELETE outcomes (the contacts twins of OutboundWriteService's).
+	public const UPDATED = 'updated';
+	public const DELETED = 'deleted';
+	public const CONFLICT = 'conflict';
 
 	public function __construct(
 		string $appName,
@@ -1029,7 +1033,7 @@ class GoogleContactsAPIService {
 	 * the map's nc_etag baseline; cap-and-drain with hold-token-on-failure. Fully
 	 * defensive — runs after the (committed) inbound pass and must never break it.
 	 *
-	 * @return array{skipped?:string, error?:mixed, baselined?:string, rebaselined?:string, created?:int, advanced?:bool, counts?:array<string,int>}
+	 * @return array{skipped?:string, error?:mixed, baselined?:string, rebaselined?:string, created?:int, written?:int, advanced?:bool, counts?:array<string,int>}
 	 */
 	public function reconcileOutbound(string $userId, int $addressBookId): array {
 		try {
@@ -1077,6 +1081,7 @@ class GoogleContactsAPIService {
 			// re-POST the orphan and duplicate it. Orphan-over-duplicate.
 			$mustAdvance = false;
 			$created = 0;
+			$written = 0; // outbound UPDATE+DELETE this run (separate budget from creates)
 			$counts = [];
 			foreach (['added', 'modified'] as $type) {
 				foreach (($changes[$type] ?? []) as $uri) {
@@ -1099,11 +1104,17 @@ class GoogleContactsAPIService {
 							continue;
 						}
 						$currentEtag = isset($card['etag']) ? (string)$card['etag'] : null;
-						// NB (C2b): a card the INBOUND pass just wrote also surfaces here
+						// NB: a card the INBOUND pass just wrote also surfaces here
 						// (origin='google'); it is mapped, so it can only be ECHO/EDIT,
-						// never LOCAL_NEW (no duplicate). classifyOutbound ignores the
-						// origin column today; C2b must consult it before PUSHING edits
-						// so an inbound write is never echoed back to Google.
+						// never LOCAL_NEW (no duplicate). C2b does NOT gate pushes on the
+						// origin column — a Google-origin card can be legitimately edited
+						// in NC and MUST push (origin records who created first, not who
+						// edited last). Echo suppression rests on nc_etag here, and
+						// defensively on the Google baseline_etag guard in
+						// updateNcContactInGoogle: even a spuriously-classified edit
+						// re-PATCHes byte-identical data under the current etag, producing
+						// no content change and a fresh baseline the next inbound reads as
+						// ECHO. No ping-pong (see docs/CONTACTS_SYNC.md).
 						$cls = self::classifyOutbound($type, true, $row?->getNcEtag(), $currentEtag);
 					}
 					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
@@ -1123,13 +1134,25 @@ class GoogleContactsAPIService {
 							'Calendar Bridge: outbound contact create ' . $uri . ' -> ' . $status,
 							['app' => Application::APP_ID],
 						);
-					} elseif ($cls !== self::ECHO) {
-						// LOCAL_EDIT / LOCAL_EDIT_INDETERMINATE -> a later phase (C2b).
+					} elseif ($cls === self::LOCAL_EDIT || $cls === self::LOCAL_EDIT_INDETERMINATE) {
+						if ($written >= $this->contactsWriteBudget()) {
+							$advance = false; // cap-and-drain
+							break 2;
+						}
+						// A failed/conflicted update HOLDS the token so it retries; an
+						// update is idempotent on replay (etag-guarded patch), so no
+						// $mustAdvance half-state like CREATE has.
+						$status = $this->updateNcContactInGoogle($userId, $addressBookId, $uri);
+						if ($status === self::ERROR || $status === self::CONFLICT) {
+							$advance = false;
+						}
+						$written++;
 						$this->logger->info(
-							'Calendar Bridge: outbound contact ' . $cls . ' ' . $uri . ' (deferred)',
+							'Calendar Bridge: outbound contact update ' . $uri . ' -> ' . $status,
 							['app' => Application::APP_ID],
 						);
 					}
+					// ECHO falls through to nothing.
 				}
 			}
 			foreach (($changes['deleted'] ?? []) as $uri) {
@@ -1137,8 +1160,25 @@ class GoogleContactsAPIService {
 				$cls = isset($mappedUris[$uri]) ? self::LOCAL_DELETE : self::ECHO_DELETE;
 				$counts[$cls] = ($counts[$cls] ?? 0) + 1;
 				if ($cls === self::LOCAL_DELETE) {
+					if ($written >= $this->contactsWriteBudget()) {
+						$advance = false; // cap-and-drain (single loop -> break, not break 2)
+						break;
+					}
+					// The card is already gone, so the resourceName must come from the
+					// map row. A transient row-read failure -> hold + retry (we can't
+					// delete blind without a resourceName).
+					$row = $this->contactMapService->getRowForCard($addressBookId, $uri);
+					if ($row === null) {
+						$advance = false;
+						continue;
+					}
+					$status = $this->deleteNcContactInGoogle($userId, $addressBookId, $uri, $row->getGoogleResourceName());
+					if ($status === self::ERROR) {
+						$advance = false;
+					}
+					$written++;
 					$this->logger->info(
-						'Calendar Bridge: outbound contact delete ' . $uri . ' (deferred)',
+						'Calendar Bridge: outbound contact delete ' . $uri . ' -> ' . $status,
 						['app' => Application::APP_ID],
 					);
 				}
@@ -1152,7 +1192,7 @@ class GoogleContactsAPIService {
 			if ($advanced) {
 				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, (string)($changes['syncToken'] ?? $stored));
 			}
-			return ['created' => $created, 'advanced' => $advanced, 'counts' => $counts];
+			return ['created' => $created, 'written' => $written, 'advanced' => $advanced, 'counts' => $counts];
 		} catch (Throwable $e) {
 			$this->logger->warning(
 				'Calendar Bridge: outbound contacts reconcile failed for address book ' . $addressBookId . ': ' . $e->getMessage(),
@@ -1284,12 +1324,296 @@ class GoogleContactsAPIService {
 		return $status === 400 || $status === 422;
 	}
 
+	/** Max outbound contact updates+deletes per run (cap-and-drain). Protected for test override. */
+	protected function contactsWriteBudget(): int {
+		return 200;
+	}
+
+	/**
+	 * The Person field groups C2 is authoritative for on an outbound UPDATE. MUST
+	 * match the groups {@see buildPersonFromVCard} can emit EXACTLY: this is the
+	 * `updatePersonFields` mask, and Google CLEARS any group named here but absent
+	 * from the body. Naming a group the builder never produces (e.g. photos,
+	 * memberships, birthdays — all in connectionsPersonFields()) would wipe it on
+	 * Google on the first edit; omitting a group the builder produces would fail to
+	 * propagate it. Keep this and buildPersonFromVCard in lock-step.
+	 */
+	private static function updatePersonFields(): string {
+		return 'names,emailAddresses,phoneNumbers,addresses,organizations,biographies,urls';
+	}
+
+	/**
+	 * Push a Nextcloud-side edit (LOCAL_EDIT) to the mapped Google contact via
+	 * people.updateContact, with the stored baseline etag in the body for optimistic
+	 * concurrency. The contacts twin of OutboundWriteService::updateLocalEventInGoogle.
+	 * Never throws (caller is defensive). Returns a status constant.
+	 */
+	private function updateNcContactInGoogle(string $userId, int $addressBookId, string $cardUri): string {
+		$row = $this->contactMapService->getRowForCard($addressBookId, $cardUri);
+		$resourceName = $row?->getGoogleResourceName() ?? '';
+		if ($row === null || $resourceName === '') {
+			return self::SKIPPED_GONE;
+		}
+		$card = $this->cdBackend->getCard($addressBookId, $cardUri);
+		if (!is_array($card)) {
+			return self::SKIPPED_GONE; // vanished mid-run; a delete delta will follow
+		}
+		try {
+			$vcard = Reader::read((string)($card['carddata'] ?? ''));
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound update — unparseable card ' . $cardUri . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return self::SKIPPED_REJECTED;
+		}
+		// Unlike CREATE, an empty Person on UPDATE is legitimate (the user blanked
+		// every synced field): the mask clears those groups on Google. Do NOT skip.
+		$person = self::buildPersonFromVCard($vcard);
+		$baselineEtag = $row->getBaselineEtag();
+		if ($baselineEtag === null || $baselineEtag === '') {
+			// No baseline to make the update conditional -> resolve against the live
+			// contact with the same LWW machinery a stale-etag 400 uses.
+			return $this->resolveUpdateConflictContact($userId, $addressBookId, $cardUri, $resourceName, $person, $card);
+		}
+		$person['etag'] = $baselineEtag; // person.etag — the optimistic-concurrency token
+		$result = $this->patchGoogleContact($userId, $resourceName, $person);
+		return $this->handleUpdateResult($userId, $addressBookId, $cardUri, $resourceName, $person, $card, $result);
+	}
+
+	/**
+	 * people.updateContact via POST + X-HTTP-Method-Override (NC's IClient has no
+	 * patch()). updatePersonFields is a QUERY param (baked into the endpoint, since
+	 * request() routes non-GET params into the body); the Person — INCLUDING its
+	 * etag — is the body. personFields echoes back the updated contact + new etag.
+	 *
+	 * @param array<string,mixed> $person
+	 * @return array<string,mixed>
+	 */
+	private function patchGoogleContact(string $userId, string $resourceName, array $person): array {
+		$endpoint = 'v1/' . $resourceName . ':updateContact'
+			. '?updatePersonFields=' . rawurlencode(self::updatePersonFields())
+			. '&personFields=' . rawurlencode($this->connectionsPersonFields());
+		return $this->googleApiService->request(
+			$userId, $endpoint, $person, 'POST', 'https://people.googleapis.com/',
+			['X-HTTP-Method-Override' => 'PATCH'],
+		);
+	}
+
+	/**
+	 * Classify a patch response. Disambiguates People's 400 `failedPrecondition`
+	 * (a STALE-ETAG CONFLICT — route to LWW) from a genuine malformed-body 400
+	 * BEFORE isPermanentBodyRejection would mis-terminate it as one-way.
+	 *
+	 * @param array<string,mixed> $person the body we sent (for the LWW re-patch)
+	 * @param array<string,mixed> $card
+	 * @param array<string,mixed> $result
+	 */
+	private function handleUpdateResult(string $userId, int $addressBookId, string $cardUri, string $resourceName, array $person, array $card, array $result): string {
+		if (!isset($result['error'])) {
+			$this->recordUpdateBaselines($addressBookId, $cardUri, $resourceName, $result);
+			return self::UPDATED;
+		}
+		$status = isset($result['statusCode']) ? (int)$result['statusCode'] : null;
+		$body = isset($result['body']) ? (string)$result['body'] : '';
+		$errStr = is_string($result['error'] ?? null) ? (string)$result['error'] : '';
+		if ($status === 404 || $status === 410) {
+			// Deleted on Google's side. Drop the mapping; the NC card stays and
+			// re-propagates on its next edit. Token advances (nothing to retry).
+			$this->contactMapService->removeForCard($addressBookId, $cardUri);
+			$this->logger->info(
+				'Calendar Bridge: outbound update target ' . $resourceName . ' gone (status ' . $status . '); removed mapping',
+				['app' => Application::APP_ID],
+			);
+			return self::SKIPPED_GONE;
+		}
+		if ($status === 400 && self::isStaleEtagError($body . ' ' . $errStr)) {
+			return $this->resolveUpdateConflictContact($userId, $addressBookId, $cardUri, $resourceName, $person, $card);
+		}
+		if (self::isPermanentBodyRejection($status)) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound update permanently rejected (' . ($status ?? '?') . ') for ' . $cardUri . '; left one-way: ' . ($body !== '' ? $body : $errStr),
+				['app' => Application::APP_ID],
+			);
+			return self::SKIPPED_REJECTED;
+		}
+		$this->logger->warning(
+			'Calendar Bridge: outbound update failed for ' . $cardUri . ' (status ' . ($status ?? '?') . '): ' . ($body !== '' ? $body : $errStr),
+			['app' => Application::APP_ID],
+		);
+		return self::ERROR;
+	}
+
+	/** Whether a People error payload is the stale-etag `failedPrecondition` (vs a malformed body). */
+	private static function isStaleEtagError(string $payload): bool {
+		// JSON status enum is FAILED_PRECONDITION; the reason is failedPrecondition.
+		return stripos($payload, 'failed_precondition') !== false
+			|| stripos($payload, 'failedprecondition') !== false;
+	}
+
+	/**
+	 * Refresh BOTH echo baselines after a successful patch: baseline_etag from the
+	 * response's NEW Google etag (suppresses the next INBOUND pull) and nc_etag from
+	 * the card's current etag (suppresses the next OUTBOUND classify). The single
+	 * load-bearing step for echo-loop safety (docs/CONTACTS_SYNC.md).
+	 *
+	 * @param array<string,mixed> $result the patch response Person
+	 */
+	private function recordUpdateBaselines(int $addressBookId, string $cardUri, string $resourceName, array $result): bool {
+		$etag = isset($result['etag']) ? (string)$result['etag'] : null;
+		$sources = (is_array($result['metadata'] ?? null) && is_array($result['metadata']['sources'] ?? null))
+			? $result['metadata']['sources'] : [];
+		$updateTime = (isset($sources[0]) && is_array($sources[0])) ? ($sources[0]['updateTime'] ?? null) : null;
+		$fresh = $this->cdBackend->getCard($addressBookId, $cardUri);
+		$recorded = $this->contactMapService->recordMapping(
+			$addressBookId,
+			$cardUri,
+			$resourceName,
+			$etag,
+			is_string($updateTime) ? $updateTime : null,
+			is_array($fresh) ? (int)($fresh['lastmodified'] ?? 0) : null,
+			is_array($fresh) ? (string)($fresh['etag'] ?? '') : null,
+			'nc',
+		);
+		if (!$recorded) {
+			// The PATCH succeeded (Google holds NC's data) but we couldn't refresh the
+			// echo baselines. We deliberately do NOT hold the token: the write already
+			// landed, so holding would re-PATCH the same card every run (a write loop)
+			// — whereas advancing lets the next INBOUND pull (incoming etag != the
+			// stale baseline) re-apply Google's now-identical version and refresh the
+			// baselines, self-healing in one cycle. Surface it for operators.
+			$this->logger->warning(
+				'Calendar Bridge: outbound update for ' . $cardUri . ' patched Google ' . $resourceName
+					. ' but FAILED to refresh the map baselines; inbound will reconcile next pull',
+				['app' => Application::APP_ID],
+			);
+		}
+		return $recorded;
+	}
+
+	/**
+	 * Resolve an outbound update against the LIVE Google contact: either a stale-etag
+	 * 400 (someone edited on Google's side too) or a missing local baseline. Re-GET
+	 * the contact for its true etag + updateTime and apply last-writer-wins (ties ->
+	 * NC). NC wins -> a single re-PATCH with the fresh etag. Google wins (or any
+	 * ambiguity) -> abandon WITHOUT touching the baseline, so the next INBOUND pull
+	 * sees Google's newer version and pulls it down (never blind-clobber). Mirrors
+	 * OutboundWriteService::resolveUpdateConflict (trigger is 400 not 412; etag in
+	 * the body not If-Match).
+	 *
+	 * @param array<string,mixed> $person the body we tried to send
+	 * @param array<string,mixed> $card
+	 */
+	private function resolveUpdateConflictContact(string $userId, int $addressBookId, string $cardUri, string $resourceName, array $person, array $card): string {
+		$live = $this->googleApiService->request(
+			$userId,
+			'v1/' . $resourceName . '?personFields=' . rawurlencode($this->connectionsPersonFields()),
+			[], 'GET', 'https://people.googleapis.com/',
+		);
+		if (isset($live['error'])) {
+			$st = isset($live['statusCode']) ? (int)$live['statusCode'] : null;
+			if ($st === 404 || $st === 410) {
+				$this->contactMapService->removeForCard($addressBookId, $cardUri);
+				return self::SKIPPED_GONE;
+			}
+			return self::CONFLICT; // can't read the live contact -> retry next run
+		}
+		$liveEtag = isset($live['etag']) ? (string)$live['etag'] : null;
+		if ($liveEtag === null) {
+			return self::CONFLICT;
+		}
+		$ncLastmod = isset($card['lastmodified']) ? (int)$card['lastmodified'] : null;
+		// Decide missing-vs-present BEFORE parsing: a genuinely absent updateTime is
+		// "unknown" (-> google_wins, the safe default), but a real timestamp that
+		// happens to parse to 0 (epoch) is still a valid time, not a parse failure.
+		$updateTimeStr = isset($live['metadata']['sources'][0]['updateTime']) ? (string)$live['metadata']['sources'][0]['updateTime'] : null;
+		$liveTs = $updateTimeStr === null ? null : self::parseGoogleTimestamp($updateTimeStr);
+		$winner = self::resolveConflictContact($ncLastmod, $liveTs);
+		if ($winner !== 'nc_wins') {
+			// Google wins. Do NOT refresh the baseline — leaving baseline_etag at the
+			// OLD value is what lets the next inbound pull (incoming etag != baseline)
+			// apply Google's newer version to the NC card and re-sync both sides.
+			$this->logger->info(
+				'Calendar Bridge: outbound update conflict on ' . $cardUri . ' resolved Google-wins (LWW); abandoning, inbound will reconcile',
+				['app' => Application::APP_ID],
+			);
+			return self::CONFLICT;
+		}
+		$person['etag'] = $liveEtag; // NC wins: single re-PATCH with the FRESH etag
+		$retry = $this->patchGoogleContact($userId, $resourceName, $person);
+		if (isset($retry['error'])) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound update conflict on ' . $cardUri . ' NC-wins re-patch failed (tight race); will retry next run',
+				['app' => Application::APP_ID],
+			);
+			return self::CONFLICT;
+		}
+		$this->recordUpdateBaselines($addressBookId, $cardUri, $resourceName, $retry);
+		$this->logger->info(
+			'Calendar Bridge: outbound update conflict on ' . $cardUri . ' resolved NC-wins (LWW); re-patched',
+			['app' => Application::APP_ID],
+		);
+		return self::UPDATED;
+	}
+
+	/**
+	 * Last-writer-wins for contacts: NC newer-OR-TIE wins; any missing timestamp ->
+	 * google_wins (the safe, non-clobbering default). Pure. Mirrors the calendar's
+	 * resolveConflict (ties -> NC).
+	 */
+	public static function resolveConflictContact(?int $ncLastmod, ?int $googleTs): string {
+		if ($ncLastmod === null || $googleTs === null) {
+			return 'google_wins';
+		}
+		return $ncLastmod >= $googleTs ? 'nc_wins' : 'google_wins';
+	}
+
+	/**
+	 * Delete the mapped Google contact for a deleted Nextcloud card (LOCAL_DELETE)
+	 * via people.deleteContact. The card is already gone, so the resourceName comes
+	 * from the map row (contacts have no extendedProperties, so ownership rests on
+	 * the map alone — no live "is it ours" re-check, unlike the calendar twin).
+	 * people.deleteContact is UNCONDITIONAL (no If-Match), so NC-delete-wins is
+	 * automatic and there is no delete-conflict path. Idempotent on 404. Never throws.
+	 */
+	private function deleteNcContactInGoogle(string $userId, int $addressBookId, string $cardUri, string $resourceName): string {
+		if ($resourceName === '') {
+			$this->contactMapService->removeForCard($addressBookId, $cardUri);
+			return self::SKIPPED_GONE;
+		}
+		$result = $this->googleApiService->request(
+			$userId, 'v1/' . $resourceName . ':deleteContact', [], 'DELETE', 'https://people.googleapis.com/',
+		);
+		if (!isset($result['error'])) {
+			$this->contactMapService->removeForCard($addressBookId, $cardUri); // 200/204
+			return self::DELETED;
+		}
+		$status = isset($result['statusCode']) ? (int)$result['statusCode'] : null;
+		if ($status === 404 || $status === 410) {
+			$this->contactMapService->removeForCard($addressBookId, $cardUri); // already gone -> idempotent
+			return self::DELETED;
+		}
+		// Transient: KEEP the map row (the retry needs its resourceName) and hold.
+		$body = isset($result['body']) ? (string)$result['body'] : '';
+		$errStr = is_string($result['error'] ?? null) ? (string)$result['error'] : '';
+		$this->logger->warning(
+			'Calendar Bridge: outbound delete failed for ' . $cardUri . ' -> ' . $resourceName . ' (status ' . ($status ?? '?') . '): ' . ($body !== '' ? $body : $errStr),
+			['app' => Application::APP_ID],
+		);
+		return self::ERROR;
+	}
+
 	/**
 	 * Build a Google People `Person` body from an NC vCard — the reverse of
 	 * {@see buildVCardFromPerson}. Emits only the fields C2 round-trips (names,
 	 * emails, phones, addresses, organizations, note, urls); never emits
 	 * etag/metadata/resourceName/primary/output-only fields. Returns [] when
 	 * nothing mappable is present (caller treats that as a terminal skip).
+	 *
+	 * The set of groups emitted here MUST stay in lock-step with the outbound update
+	 * mask {@see updatePersonFields}: a group emitted here but missing from the mask
+	 * won't propagate on an update; a group in the mask but never emitted here gets
+	 * CLEARED on Google on the first edit.
 	 *
 	 * @return array<string,mixed>
 	 */

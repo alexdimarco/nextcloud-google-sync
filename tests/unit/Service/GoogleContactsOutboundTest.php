@@ -45,4 +45,30 @@ class GoogleContactsOutboundTest extends TestCase {
 		// A mapped card we cannot read the etag for is a (indeterminate) edit, never an echo.
 		$this->assertSame(GoogleContactsAPIService::LOCAL_EDIT, GoogleContactsAPIService::classifyOutbound('modified', true, 'etagX', null));
 	}
+
+	// --- C2b outbound update conflict LWW (ties -> NC; any missing timestamp -> Google) ---
+
+	public function testConflictNcStrictlyNewerWins(): void {
+		$this->assertSame('nc_wins', GoogleContactsAPIService::resolveConflictContact(100, 50));
+	}
+
+	public function testConflictGoogleStrictlyNewerWins(): void {
+		$this->assertSame('google_wins', GoogleContactsAPIService::resolveConflictContact(50, 100));
+	}
+
+	public function testConflictTieGoesToNc(): void {
+		$this->assertSame('nc_wins', GoogleContactsAPIService::resolveConflictContact(100, 100));
+	}
+
+	public function testConflictMissingNcTimestampGoogleWins(): void {
+		$this->assertSame('google_wins', GoogleContactsAPIService::resolveConflictContact(null, 100));
+	}
+
+	public function testConflictMissingGoogleTimestampGoogleWins(): void {
+		$this->assertSame('google_wins', GoogleContactsAPIService::resolveConflictContact(100, null));
+	}
+
+	public function testConflictBothMissingGoogleWins(): void {
+		$this->assertSame('google_wins', GoogleContactsAPIService::resolveConflictContact(null, null));
+	}
 }

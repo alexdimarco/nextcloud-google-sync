@@ -240,6 +240,10 @@ class GoogleAPIService {
 					. $e->getMessage()
 					. ' status code: ' . $statusCode,
 				'statusCode' => $statusCode,
+				// Surface the response body so callers can branch on the API's
+				// specific error reason (e.g. People's 400 `failedPrecondition`
+				// stale-etag conflict vs a genuine malformed-body 400).
+				'body' => $body,
 				'retryAfter' => $retryAfter,
 			];
 		} catch (ConnectException $e) {
@@ -247,6 +251,9 @@ class GoogleAPIService {
 			return [
 				'error' => 'Connection error: ' . $e->getMessage(),
 				'statusCode' => null,
+				// No HTTP response on a connect failure; keep 'body' present (null) so
+				// the error shape matches the >=400 paths for callers that read it.
+				'body' => null,
 				'retryAfter' => null,
 			];
 		}

@@ -118,13 +118,11 @@
     <InvalidReturnStatement>
       <code><![CDATA[$empty + ['error' => 'could not load contact map']]]></code>
       <code><![CDATA[$empty + ['error' => 'not your address book']]]></code>
-      <code><![CDATA[['created' => $created, 'advanced' => $advance, 'counts' => $counts]]]></code>
       <code><![CDATA[['nbSeen' => $seen, 'nbCreated' => $created, 'nbUpdated' => $updated, 'nbDeleted' => $deleted, 'nbEcho' => $echo, 'advanced' => $advance]]]></code>
     </InvalidReturnStatement>
     <InvalidReturnType>
       <code><![CDATA[array{error?: mixed, nbSeen?: int, nbCreated?: int, nbUpdated?: int, nbDeleted?: int, nbEcho?: int}]]></code>
       <code><![CDATA[array{scanned:int, removed:int, ambiguous:int}]]></code>
-      <code><![CDATA[array{skipped?:string, error?:mixed, baselined?:string, rebaselined?:string, created?:int, advanced?:bool}]]></code>
     </InvalidReturnType>
     <UndefinedClass>
       <code><![CDATA[$this->cdBackend]]></code>
@@ -146,10 +144,13 @@
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
+      <code><![CDATA[$this->cdBackend]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
       <code><![CDATA[$vCard]]></code>
+      <code><![CDATA[Reader]]></code>
       <code><![CDATA[Reader]]></code>
       <code><![CDATA[Reader]]></code>
       <code><![CDATA[VCard]]></code>
