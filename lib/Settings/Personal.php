@@ -2,27 +2,18 @@
 
 namespace OCA\CalendarBridge\Settings;
 
-use OC\User\NoUserException;
 use OCA\CalendarBridge\AppInfo\Application;
 use OCA\CalendarBridge\Service\GoogleAPIService;
 use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
-use OCP\Files\Folder;
-use OCP\Files\IRootFolder;
-use OCP\Files\NotFoundException;
-use OCP\Files\NotPermittedException;
 use OCP\IConfig;
-use OCP\IUserManager;
 use OCP\Settings\ISettings;
-use Throwable;
 
 class Personal implements ISettings {
 
 	public function __construct(
 		private IConfig $config,
-		private IRootFolder $root,
-		private IUserManager $userManager,
 		private IInitialState $initialStateService,
 		private GoogleAPIService $googleAPIService,
 		private ?string $userId,
@@ -32,37 +23,20 @@ class Personal implements ISettings {
 
 	/**
 	 * @return TemplateResponse
-	 * @throws NotFoundException
-	 * @throws NotPermittedException
-	 * @throws NoUserException
 	 */
 	public function getForm(): TemplateResponse {
 		if ($this->userId === null) {
 			return new TemplateResponse(Application::APP_ID, 'personalSettings');
 		}
 		$userName = $this->config->getUserValue($this->userId, Application::APP_ID, 'user_name');
-		$driveOutputDir = $this->config->getUserValue($this->userId, Application::APP_ID, 'drive_output_dir', '/Google Drive');
-		$driveOutputDir = $driveOutputDir ?: '/Google Drive';
-		$driveSharedWithMeOutputDir = $this->config->getUserValue($this->userId, Application::APP_ID, 'drive_shared_with_me_output_dir', '/Google Drive/Shared with me');
-		$driveSharedWithMeOutputDir = $driveSharedWithMeOutputDir ?: '/Google Drive/Shared with me';
 		$considerAllEvents = $this->config->getUserValue($this->userId, Application::APP_ID, 'consider_all_events', '1') === '1';
-		$considerSharedFiles = $this->config->getUserValue($this->userId, Application::APP_ID, 'consider_shared_files', '0') === '1';
 		$considerSharedAlbums = $this->config->getUserValue($this->userId, Application::APP_ID, 'consider_shared_albums', '0') === '1';
 		$considerOtherContacts = $this->config->getUserValue($this->userId, Application::APP_ID, 'consider_other_contacts', '0') === '1';
-		$documentFormat = $this->config->getUserValue($this->userId, Application::APP_ID, 'document_format', 'openxml');
-		if (!in_array($documentFormat, ['openxml', 'opendoc'])) {
-			$documentFormat = 'openxml';
-		}
 
 		// for OAuth
 		$clientID = $this->secretService->getEncryptedAppValue('client_id');
 		$clientSecret = $this->secretService->getEncryptedAppValue('client_secret') !== '';
 		$usePopup = $this->config->getAppValue(Application::APP_ID, 'use_popup', '0');
-
-		// get free space
-		$userFolder = $this->root->getUserFolder($this->userId);
-		$freeSpace = self::getFreeSpace($userFolder, $driveOutputDir);
-		$user = $this->userManager->get($this->userId);
 
 		// make a request to potentially refresh the token before the settings page is loaded
 		$accessToken = $this->secretService->getEncryptedUserValue($this->userId, 'token');
@@ -83,15 +57,9 @@ class Personal implements ISettings {
 			'client_secret' => $clientSecret,
 			'use_popup' => ($usePopup === '1'),
 			'user_name' => $userName,
-			'free_space' => $freeSpace,
-			'user_quota' => $user === null ? '' : $user->getQuota(),
 			'consider_all_events' => $considerAllEvents,
-			'consider_shared_files' => $considerSharedFiles,
 			'consider_shared_albums' => $considerSharedAlbums,
 			'consider_other_contacts' => $considerOtherContacts,
-			'document_format' => $documentFormat,
-			'drive_output_dir' => $driveOutputDir,
-			'drive_shared_with_me_output_dir' => $driveSharedWithMeOutputDir,
 			'user_scopes' => $userScopes,
 		];
 		$this->initialStateService->provideInitialState('user-config', $userConfig);
@@ -104,21 +72,5 @@ class Personal implements ISettings {
 
 	public function getPriority(): int {
 		return 10;
-	}
-
-	/**
-	 * @param Folder $userRoot
-	 * @param string $outputDir
-	 * @return bool|float|int
-	 * @throws NotFoundException
-	 */
-	public static function getFreeSpace(Folder $userRoot, string $outputDir) {
-		try {
-			// OutputDir can be on an external storage which can have more free space
-			$freeSpace = $userRoot->get($outputDir)->getStorage()->free_space('/');
-		} catch (Throwable $e) {
-			$freeSpace = false;
-		}
-		return $freeSpace !== false && $freeSpace > 0 ? $freeSpace : $userRoot->getStorage()->free_space('/');
 	}
 }

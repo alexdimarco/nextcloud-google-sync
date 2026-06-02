@@ -11,8 +11,8 @@ dev/test setup; production setup will differ (HTTPS, verified domain, etc.).
   - Google Calendar API (required for Phase 0)
   - Google People API (used for contacts — not under test in Phase 0 but the
     consent screen scopes include it if enabled)
-  - Google Drive API (only if you want to test the Drive importer)
-  - Google Photos API is **not used** in this fork (dropped in 4.0.0).
+  - Google Drive API and Google Photos API are **not used** in this fork (Drive
+    removed in 4.8.0; Photos dropped in 4.0.0).
 - The OAuth consent screen configured in **Testing** mode with the
   sacrificial Google account added as a Test user.
 - The exact redirect URI:
@@ -41,7 +41,6 @@ Done? [ ]
 - Search for and **Enable**:
   - **Google Calendar API**
   - **People API** (only needed if you'll also exercise the contacts importer)
-  - **Google Drive API** (only if you'll test Drive import — optional for Phase 0)
 
 Done? [ ]
 
@@ -61,8 +60,7 @@ Done? [ ]
   - `https://www.googleapis.com/auth/calendar.readonly`
   - `https://www.googleapis.com/auth/calendar.events.readonly`
   - (Optional for Phase 0) `https://www.googleapis.com/auth/contacts.readonly`,
-    `https://www.googleapis.com/auth/contacts.other.readonly`,
-    `https://www.googleapis.com/auth/drive.readonly`
+    `https://www.googleapis.com/auth/contacts.other.readonly`
   - (Always) `openid`, `email`, `profile` — required so the app can pull
     `userinfo` to display "connected as X".
 - Save and continue.

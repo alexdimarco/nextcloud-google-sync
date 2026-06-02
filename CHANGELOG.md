@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.8.0]
+
+### Removed
+
+- **The Google Drive import feature** (inherited from the upstream Google
+  integration) has been removed: its settings section, background import job,
+  service, routes, and the `drive.readonly` OAuth scope are all gone. This also
+  eliminates the recurring *"Google Drive API has not been used … or it is
+  disabled"* error that appeared on the settings page when the Drive API was not
+  enabled in the Google Cloud project. The Google **Contacts** import is
+  unaffected and remains available. Existing users keep an unused Drive grant in
+  Google until they next reconnect; the consent screen no longer requests it.
+
 ## [4.7.0]
 
 ### Added

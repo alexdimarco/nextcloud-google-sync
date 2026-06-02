@@ -15,7 +15,6 @@ namespace OCA\CalendarBridge\Controller;
 use OCA\CalendarBridge\AppInfo\Application;
 use OCA\CalendarBridge\Service\GoogleCalendarAPIService;
 use OCA\CalendarBridge\Service\GoogleContactsAPIService;
-use OCA\CalendarBridge\Service\GoogleDriveAPIService;
 use OCA\CalendarBridge\Service\OutboundReconcileService;
 use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Controller;
@@ -36,7 +35,6 @@ class GoogleAPIController extends Controller {
 		private IGroupManager $groupManager,
 		private IUserSession $userSession,
 		private GoogleContactsAPIService $googleContactsAPIService,
-		private GoogleDriveAPIService $googleDriveAPIService,
 		private GoogleCalendarAPIService $googleCalendarAPIService,
 		private OutboundReconcileService $outboundReconcileService,
 		private ?string $userId,
@@ -44,23 +42,6 @@ class GoogleAPIController extends Controller {
 	) {
 		parent::__construct($appName, $request);
 		$this->accessToken = $this->userId !== null ? $this->secretService->getEncryptedUserValue($this->userId, 'token') : '';
-	}
-
-	/**
-	 * @NoAdminRequired
-	 *
-	 * @return DataResponse
-	 */
-	public function getImportDriveInformation(): DataResponse {
-		if ($this->accessToken === '') {
-			return new DataResponse([], 400);
-		}
-		return new DataResponse([
-			'importing_drive' => $this->config->getUserValue($this->userId, Application::APP_ID, 'importing_drive') === '1',
-			'last_drive_import_timestamp' => (int)$this->config->getUserValue($this->userId, Application::APP_ID, 'last_drive_import_timestamp', '0'),
-			'nb_imported_files' => (int)$this->config->getUserValue($this->userId, Application::APP_ID, 'nb_imported_files', '0'),
-			'drive_imported_size' => (int)$this->config->getUserValue($this->userId, Application::APP_ID, 'drive_imported_size', '0'),
-		]);
 	}
 
 	/**
@@ -102,44 +83,6 @@ class GoogleAPIController extends Controller {
 				$result[$key]["isJobRegistered"] = $isJobRegistered;
 				$result[$key]["isTwoWayEnabled"] = $this->outboundReconcileService->isTwoWayEnabled($this->userId, $cal["id"]);
 			}
-			$response = new DataResponse($result);
-		}
-		return $response;
-	}
-
-	/**
-	 * @NoAdminRequired
-	 *
-	 * @return DataResponse
-	 */
-	public function getDriveSize(): DataResponse {
-		if ($this->accessToken === '' || $this->userId === null) {
-			return new DataResponse([], 400);
-		}
-		/** @var array{error?:string} $result */
-		$result = $this->googleDriveAPIService->getDriveSize($this->userId);
-		if (isset($result['error'])) {
-			$response = new DataResponse($result['error'], 401);
-		} else {
-			$response = new DataResponse($result);
-		}
-		return $response;
-	}
-
-	/**
-	 * @NoAdminRequired
-	 *
-	 * @return DataResponse
-	 */
-	public function importDrive(): DataResponse {
-		if ($this->accessToken === '' || $this->userId === null) {
-			return new DataResponse([], 400);
-		}
-		/** @var array{error?:string} $result */
-		$result = $this->googleDriveAPIService->startImportDrive($this->userId);
-		if (isset($result['error'])) {
-			$response = new DataResponse($result['error'], 401);
-		} else {
 			$response = new DataResponse($result);
 		}
 		return $response;

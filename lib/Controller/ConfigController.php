@@ -16,7 +16,6 @@ use DateTime;
 use Exception;
 use OCA\CalendarBridge\AppInfo\Application;
 use OCA\CalendarBridge\Service\GoogleAPIService;
-use OCA\CalendarBridge\Service\GoogleDriveAPIService;
 use OCA\CalendarBridge\Service\SecretService;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
@@ -36,7 +35,6 @@ use Throwable;
 
 class ConfigController extends Controller {
 
-	public const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 	public const CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly';
 	public const CONTACTS_OTHER_SCOPE = 'https://www.googleapis.com/auth/contacts.other.readonly';
 	public const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
@@ -56,12 +54,7 @@ class ConfigController extends Controller {
 		'user_name',
 		'consider_all_events',
 		'consider_other_contacts',
-		'consider_shared_files',
 		'consider_shared_albums',
-		'document_format',
-		'drive_output_dir',
-		'drive_shared_with_me_output_dir',
-		'importing_drive',
 		'oauth_state',
 		'redirect_uri',
 	];
@@ -75,7 +68,6 @@ class ConfigController extends Controller {
 		private IContactManager $contactsManager,
 		private IInitialState $initialStateService,
 		private GoogleAPIService $googleApiService,
-		private GoogleDriveAPIService $googleDriveApiService,
 		private ?string $userId,
 		private ICrypto $crypto,
 		private SecretService $secretService,
@@ -121,15 +113,6 @@ class ConfigController extends Controller {
 			$this->config->deleteUserValue($this->userId, Application::APP_ID, 'token_expires_at');
 			$this->config->deleteUserValue($this->userId, Application::APP_ID, 'token');
 			$result['user_name'] = '';
-		} else {
-			if (isset($values['drive_output_dir'])) {
-				$root = \OCP\Server::get(\OCP\Files\IRootFolder::class);
-				$userRoot = $root->getUserFolder($this->userId);
-				$result['free_space'] = \OCA\CalendarBridge\Settings\Personal::getFreeSpace($userRoot, $values['drive_output_dir']);
-			}
-			if (isset($values['importing_drive']) && $values['importing_drive'] === '0') {
-				$this->googleDriveApiService->cancelImport($this->userId);
-			}
 		}
 		return new DataResponse($result);
 	}
@@ -220,7 +203,6 @@ class ConfigController extends Controller {
 		$scopes = explode(' ', $scope);
 
 		$scopesArray = [
-			'can_access_drive' => in_array(self::DRIVE_SCOPE, $scopes) ? 1 : 0,
 			'can_access_contacts' => in_array(self::CONTACTS_SCOPE, $scopes) ? 1 : 0,
 			'can_access_other_contacts' => in_array(self::CONTACTS_OTHER_SCOPE, $scopes) ? 1 : 0,
 			'can_access_calendar' => (in_array(self::CALENDAR_SCOPE, $scopes) && in_array(self::CALENDAR_EVENTS_SCOPE, $scopes)) ? 1 : 0,

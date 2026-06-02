@@ -17,7 +17,6 @@ return [
 		['name' => 'config#getLocalAddressBooks', 'url' => '/local-addressbooks', 'verb' => 'GET'],
 		['name' => 'config#popupSuccessPage', 'url' => '/popup-success', 'verb' => 'GET'],
 
-		['name' => 'googleAPI#getDriveSize', 'url' => '/drive-size', 'verb' => 'GET'],
 		['name' => 'googleAPI#getCalendarList', 'url' => '/calendars', 'verb' => 'GET'],
 		['name' => 'googleAPI#getContactNumber', 'url' => '/contact-number', 'verb' => 'GET'],
 		['name' => 'googleAPI#importCalendar', 'url' => '/import-calendar', 'verb' => 'GET'],
@@ -31,7 +30,5 @@ return [
 		['name' => 'googleAPI#deleteLinkedCalendars', 'url' => '/linked-calendars', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#resetRegisteredSyncCalendar', 'url' => '/reset-sync-calendar', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#importContacts', 'url' => '/import-contacts', 'verb' => 'GET'],
-		['name' => 'googleAPI#importDrive', 'url' => '/import-files', 'verb' => 'GET'],
-		['name' => 'googleAPI#getImportDriveInformation', 'url' => '/import-files-info', 'verb' => 'GET'],
 	]
 ];
