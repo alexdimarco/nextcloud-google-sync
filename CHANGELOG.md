@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.12.0]
+
+### Added
+
+- **Outbound contacts sync — Nextcloud → Google, first slice (Track 2, C2a):
+  CREATE.** When contacts sync is on for an address book, a *new* contact you
+  create in Nextcloud is now pushed up to Google. It is gated behind a new
+  read-write `contacts` permission (you must **Disconnect** and **Sign in with
+  Google** again to grant it — until then nothing is written to Google), and
+  echo-suppressed so the contact isn't re-created or bounced back. Editing and
+  deleting Nextcloud contacts on the Google side, plus the edit-conflict
+  handling, land in the next slice; for now NC-side edits/deletes are detected
+  and logged but not yet pushed. See `docs/CONTACTS_SYNC.md`.
+
 ## [4.11.0]
 
 ### Added

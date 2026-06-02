@@ -353,6 +353,9 @@ export default {
 				// unused. (calendar-level NC -> Google sync.)
 				'https://www.googleapis.com/auth/calendar.app.created',
 				'https://www.googleapis.com/auth/contacts.readonly',
+				// Read-write contacts scope: enables opt-in outbound (NC -> Google)
+				// contacts sync. Granted on reconnect; harmless if unused.
+				'https://www.googleapis.com/auth/contacts',
 				'https://www.googleapis.com/auth/contacts.other.readonly',
 			]
 			const requestUrl = 'https://accounts.google.com/o/oauth2/v2/auth?'
