@@ -376,10 +376,28 @@ class EventMapService {
 	 * filled in by recordFromImport on subsequent syncs, which have the real
 	 * per-exception Google ids (those are not recoverable from NC data alone).
 	 *
+	 * This seeds every existing object as origin='google' (an already-imported
+	 * echo), which is ONLY correct for a GOOGLE-ORIGIN calendar. For an NC-ORIGIN
+	 * pairing — a pre-existing NC calendar linked to a freshly created (empty)
+	 * Google calendar — those existing objects are genuinely LOCAL events the
+	 * reconciler must PUSH; seeding them as google echoes would make every one
+	 * classify as ECHO and silently never sync out. So gate on the calendar's
+	 * origin (the same 3-state probe the reconciler uses): seed ONLY when it is
+	 * confirmed Google-origin (false); skip for NC-origin (true) and for an
+	 * undetermined origin (null — defer to a later tick rather than risk
+	 * mislabeling local events).
+	 *
 	 * @param int $ncCalId The NC calendar id.
 	 * @param iterable $ncObjects The CalDavBackend::getCalendarObjects() rows (uri + lastmodified).
+	 * @param ?bool $ncOriginPairing CalendarMapService::hasNcOriginPairing() result for this calendar.
 	 */
-	public function seedFromExistingIfEmpty(int $ncCalId, iterable $ncObjects): void {
+	public function seedFromExistingIfEmpty(int $ncCalId, iterable $ncObjects, ?bool $ncOriginPairing = null): void {
+		if ($ncOriginPairing !== false) {
+			// NC-origin (true): the reconciler's first-run bootstrap pushes these
+			// as LOCAL_NEW. Unknown (null): a transient origin-probe error — defer;
+			// the backfill is lazy and re-attempts next tick once origin resolves.
+			return;
+		}
 		try {
 			if ($this->mapper->countForCalendar($ncCalId) > 0) {
 				return;
