@@ -65,8 +65,8 @@ class SyncContactsJob extends TimedJob {
 				'Calendar Bridge: outbound contacts reconcile failed for address book ' . $addressBookId . ' (user ' . $userId . '): ' . $error,
 				['app' => Application::APP_ID],
 			);
-		} elseif (($out['created'] ?? 0) > 0) {
-			echo ' outbound +' . $out['created'] . PHP_EOL;
+		} elseif (($out['created'] ?? 0) > 0 || ($out['written'] ?? 0) > 0) {
+			echo ' outbound +' . ($out['created'] ?? 0) . ' ~/-' . ($out['written'] ?? 0) . PHP_EOL;
 		}
 	}
 }

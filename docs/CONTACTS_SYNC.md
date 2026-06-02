@@ -5,7 +5,7 @@
 
 # Contacts Sync — Design
 
-Status: DESIGN — not yet implemented.
+Status: IMPLEMENTED — C0 (continuous inbound), C1 (de-duplication), C2a (outbound create), and C2b (outbound update/delete/conflict) are all shipped. Two-way sync for "My Contacts" is complete. See §7 for the per-phase status.
 
 This doc adapts the proven, feature-complete **calendar bidirectional sync** architecture ("reconciler + origin identity + single-token-owner") to **contacts**. It targets three owner asks: (1) continuous incremental Google→NC sync, (2) de-duplication, (3) NC→Google outbound. Where a calendar pattern maps cleanly, we reuse it verbatim; the one place it does not (no `extendedProperties` on People) is called out explicitly in §3.
 
@@ -145,6 +145,15 @@ Each phase follows the calendar cadence: **branch → lab validation → adversa
 - **Re-consent to read-write `contacts` scope** (widen-and-gate, §8a).
 - `ContactsReconcileService`: read CardDAV `getChangesForAddressBook` deltas, classify `LOCAL_NEW`/`LOCAL_EDIT`/`LOCAL_DELETE`/`ECHO` against the map, write `createContact`/`updateContact`/`deleteContact` (echo-suppressed per §3, LWW per §6, etag optimistic concurrency, sequential per user). Advance NC change token only after all writes succeed.
 - "Other contacts" remain **inbound-only** (Google makes them read-only — §9).
+
+**C2a — CREATE — DONE (4.12.0).** `reconcileOutbound` + `classifyOutbound` + `createNcContactInGoogle` (`people:createContact`). A create that succeeds in Google but whose map row fails to persist is surfaced as an orphan and the token is force-advanced so it can never be re-POSTed (createContact has no client id → a replay would duplicate).
+
+**C2b — UPDATE + DELETE + conflict — DONE (4.13.0).** Implemented entirely in `GoogleContactsAPIService` (no separate service — it lives beside the create path):
+- **UPDATE** — `updateNcContactInGoogle` → `people:updateContact` as **POST + `X-HTTP-Method-Override: PATCH`** (NC's `IClient` has no `patch()`). The `updatePersonFields` mask is a **dedicated, writable-only** list (`updatePersonFields()`) that is the EXACT set `buildPersonFromVCard` emits — *not* `connectionsPersonFields()` (which names read-only groups like photos/memberships that Google would CLEAR on the first edit). The mask + sparse body gives correct clear-on-empty for managed fields. The current Google `etag` rides in the body for optimistic concurrency.
+- **CONFLICT** — Google's stale-etag reply is **HTTP 400 `failedPrecondition`** (not 412 like calendar); it is disambiguated from a genuine malformed-body 400 by inspecting the response body, BEFORE the permanent-reject path. On conflict (or a missing baseline) `resolveUpdateConflictContact` re-GETs the live contact and applies LWW (§6, ties→NC): **NC wins** → single re-PATCH with the fresh etag; **Google wins** → abandon **without** touching `baseline_etag`, so the next inbound pull (incoming etag ≠ baseline) applies Google's newer version (never blind-clobber).
+- **DELETE** — `deleteNcContactInGoogle` → `people:deleteContact`, which is **unconditional** (no If-Match), so NC-delete-wins is automatic and there is **no delete-conflict path**. Idempotent on 404/410. The card is already gone, so the `resourceName` comes from the map row (contacts have no `extendedProperties` → no live "is it ours" re-check; ownership is the map row alone). The row is removed only on success/idempotent-404.
+- **No-ping-pong** — a successful write refreshes BOTH baselines (`baseline_etag` from the response's new Google etag; `nc_etag` from the card's current etag), so the next inbound pull sees `ECHO` (incoming etag == baseline) and the next outbound classify sees `ECHO` (current etag == nc_etag). C2b does **not** gate pushes on the `origin` column (a Google-origin card can be legitimately edited in NC and must push); echo suppression rests on the etag baselines + LWW.
+- **Token discipline** — UPDATE/DELETE share a cap-and-drain `contactsWriteBudget()` (separate from creates); a failed/conflicted write HOLDS the token (idempotent on replay — etag-guarded patch, 404-idempotent delete), so no CREATE-style orphan/`$mustAdvance` half-state.
 
 ---
 

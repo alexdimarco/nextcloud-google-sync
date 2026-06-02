@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.13.0]
+
+### Added
+
+- **Outbound contacts sync — Nextcloud → Google, second slice (Track 2, C2b):
+  UPDATE + DELETE.** With contacts sync on for an address book (and the
+  read-write `contacts` permission granted), editing a synced contact in
+  Nextcloud now updates it on Google, and deleting it in Nextcloud deletes it
+  on Google. Updates use optimistic concurrency (the contact's etag), so a
+  simultaneous edit on the Google side is detected and resolved last-writer-wins
+  with ties going to Nextcloud — exactly matching the calendar behavior; if
+  Google's copy is newer, the Nextcloud edit stands down and Google's version is
+  pulled back on the next sync. Deletions are authoritative and idempotent (a
+  contact already gone on Google counts as a successful delete). Writes are
+  echo-suppressed in both directions so a change never bounces back. This
+  completes two-way sync for "My Contacts" ("Other contacts" remain inbound-only
+  — Google makes them read-only). See `docs/CONTACTS_SYNC.md`.
+
+### Notes
+
+- An outbound update sends only the contact fields this app round-trips (name,
+  emails, phones, addresses, organization, note, URLs); other Google contact
+  data (photos, groups, birthdays, etc.) is left untouched.
+
 ## [4.12.0]
 
 ### Added
