@@ -23,6 +23,7 @@ use OCP\Contacts\IManager as IContactManager;
 use OCP\IConfig;
 use Psr\Log\LoggerInterface;
 use Sabre\VObject\Component\VCard;
+use Sabre\VObject\Reader;
 use Throwable;
 
 /**
@@ -595,6 +596,17 @@ class GoogleContactsAPIService {
 	 * @return array{error?: mixed, nbSeen?: int, nbCreated?: int, nbUpdated?: int, nbDeleted?: int, nbEcho?: int}
 	 */
 	public function syncAddressBook(string $userId, int $addressBookId): array {
+		// Defense-in-depth: only ever sync into the user's own address book (the
+		// job is registered via the guarded setSyncContacts, but never write the
+		// user's Google contacts into someone else's book even if the job arg is
+		// stale or tampered).
+		if (!$this->ownsAddressBook($userId, $addressBookId)) {
+			$this->logger->warning(
+				'Calendar Bridge: refusing to sync contacts into address book ' . $addressBookId . ' not owned by ' . $userId,
+				['app' => Application::APP_ID],
+			);
+			return ['error' => 'not your address book'];
+		}
 		$tokenKey = 'contacts_sync_token_' . $addressBookId;
 		$stored = $this->config->getUserValue($userId, Application::APP_ID, $tokenKey, '');
 		$changes = $this->getContactChanges($userId, $stored === '' ? null : $stored);
@@ -782,10 +794,37 @@ class GoogleContactsAPIService {
 	/** Turn continuous contacts sync on/off for one address book. */
 	public function setSyncContacts(string $userId, int $addressBookId, bool $enabled): void {
 		if ($enabled) {
+			if (!$this->ownsAddressBook($userId, $addressBookId)) {
+				$this->logger->warning(
+					'Calendar Bridge: refusing to enable contacts sync for address book ' . $addressBookId . ' not owned by ' . $userId,
+					['app' => Application::APP_ID],
+				);
+				return;
+			}
 			$this->registerSyncContacts($userId, $addressBookId);
 		} else {
 			$this->unregisterSyncContacts($userId, $addressBookId);
 		}
+	}
+
+	/**
+	 * Whether the user owns (and can write) this address book — the access-control
+	 * gate for the sync/dedupe entry points so a crafted addressBookId cannot
+	 * touch another user's contacts.
+	 */
+	private function ownsAddressBook(string $userId, int $addressBookId): bool {
+		$principal = 'principals/users/' . $userId;
+		foreach ($this->cdBackend->getAddressBooksForUser($principal) as $ab) {
+			if ((int)($ab['id'] ?? 0) !== $addressBookId) {
+				continue;
+			}
+			if ((string)($ab['uri'] ?? '') === 'system') {
+				return false;
+			}
+			$owner = (string)($ab['{http://owncloud.org/ns}owner-principal'] ?? '');
+			return $owner === '' || $owner === $principal;
+		}
+		return false;
 	}
 
 	/**
@@ -818,5 +857,124 @@ class GoogleContactsAPIService {
 			];
 		}
 		return $out;
+	}
+
+	/**
+	 * One-shot de-duplication for an address book (Track 2 C1). The C0 identity
+	 * map already PREVENTS new within-address-book duplicates; this collapses
+	 * PRE-EXISTING ones — most realistically cards that lived in the address book
+	 * before sync was enabled, which the sync then re-created as a second
+	 * (Google-mapped) card.
+	 *
+	 * CONSERVATIVE keep-one rule (per docs/CONTACTS_SYNC.md §5): remove only an
+	 * UNMAPPED "stray" card that high-confidence-matches EXACTLY ONE mapped
+	 * (Google-synced) card — same normalized full name AND at least one shared
+	 * email. It NEVER deletes a mapped card, NEVER acts on a low-confidence match
+	 * (no name or no shared email), and SKIPS ambiguous matches (a stray matching
+	 * two mapped cards). Purely-unmapped duplicate groups are left untouched.
+	 * Idempotent: a second run finds nothing. Deleted cards go to the Contacts
+	 * trash (recoverable).
+	 *
+	 * @return array{scanned:int, removed:int, ambiguous:int}
+	 */
+	public function dedupeAddressBook(string $userId, int $addressBookId): array {
+		$empty = ['scanned' => 0, 'removed' => 0, 'ambiguous' => 0];
+		if (!$this->ownsAddressBook($userId, $addressBookId)) {
+			$this->logger->warning(
+				'Calendar Bridge: refusing to dedupe address book ' . $addressBookId . ' not owned by ' . $userId,
+				['app' => Application::APP_ID],
+			);
+			return $empty + ['error' => 'not your address book'];
+		}
+		// Load the whole map for this address book ONCE and fail closed on error:
+		// a per-card lookup that returned null on a transient DB error would
+		// misclassify a synced card as an unmapped stray and could delete it.
+		$mappedUris = $this->contactMapService->getMappedCardUris($addressBookId);
+		if ($mappedUris === null) {
+			$this->logger->warning(
+				'Calendar Bridge: dedupe aborted — could not load contact map for address book ' . $addressBookId,
+				['app' => Application::APP_ID],
+			);
+			return $empty + ['error' => 'could not load contact map'];
+		}
+		$mapped = [];
+		$unmapped = [];
+		$scanned = 0;
+		foreach ($this->cdBackend->getCards($addressBookId) as $card) {
+			$uri = (string)($card['uri'] ?? '');
+			if ($uri === '') {
+				continue;
+			}
+			$scanned++;
+			[$fn, $emails] = $this->cardIdentity((string)($card['carddata'] ?? ''));
+			if ($fn === '') {
+				continue; // cannot match safely without a name
+			}
+			$entry = ['uri' => $uri, 'fn' => $fn, 'emails' => $emails];
+			if (isset($mappedUris[$uri])) {
+				$mapped[] = $entry;
+			} else {
+				$unmapped[] = $entry;
+			}
+		}
+		$removed = 0;
+		$ambiguous = 0;
+		foreach ($unmapped as $u) {
+			if (count($u['emails']) === 0) {
+				continue; // need a shared email for a high-confidence match
+			}
+			$matches = 0;
+			foreach ($mapped as $m) {
+				if ($m['fn'] === $u['fn'] && count(array_intersect_key($u['emails'], $m['emails'])) > 0) {
+					$matches++;
+				}
+			}
+			if ($matches === 0) {
+				continue; // no synced canonical to fold into — leave it alone
+			}
+			if ($matches > 1) {
+				$ambiguous++; // matches several distinct synced contacts — don't guess
+				continue;
+			}
+			try {
+				$this->cdBackend->deleteCard($addressBookId, $u['uri']);
+				$removed++;
+			} catch (Throwable $e) {
+				$this->logger->warning(
+					'Calendar Bridge: dedupe failed to delete card ' . $u['uri'] . ': ' . $e->getMessage(),
+					['app' => Application::APP_ID],
+				);
+			}
+		}
+		$this->logger->info(
+			'Calendar Bridge: dedupe address book ' . $addressBookId . ' — scanned=' . $scanned
+				. ' removed=' . $removed . ' ambiguous=' . $ambiguous,
+			['app' => Application::APP_ID],
+		);
+		return ['scanned' => $scanned, 'removed' => $removed, 'ambiguous' => $ambiguous];
+	}
+
+	/**
+	 * The normalized full name + lowercased email set of a vCard — the matching
+	 * key for de-duplication. Unparseable cards yield an empty name (no match).
+	 *
+	 * @return array{0:string, 1:array<string,true>}
+	 */
+	private function cardIdentity(string $carddata): array {
+		$fn = '';
+		$emails = [];
+		try {
+			$vcard = Reader::read($carddata);
+			$fn = (string)preg_replace('/\s+/', ' ', strtolower(trim((string)($vcard->FN ?? ''))));
+			foreach (($vcard->EMAIL ?? []) as $email) {
+				$val = strtolower(trim((string)$email));
+				if ($val !== '') {
+					$emails[$val] = true;
+				}
+			}
+		} catch (Throwable $e) {
+			// unparseable -> empty identity, which matches nothing
+		}
+		return [$fn, $emails];
 	}
 }

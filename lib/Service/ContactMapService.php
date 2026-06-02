@@ -152,6 +152,31 @@ class ContactMapService {
 		}
 	}
 
+	/**
+	 * The set of NC card URIs that have a mapping row in this address book, as
+	 * [uri => true]. Returns NULL on a lookup error (distinct from an empty
+	 * address book, which returns []) so a caller can FAIL CLOSED — e.g. the
+	 * de-dup pass aborts rather than risk misclassifying a synced card as a
+	 * deletable stray.
+	 *
+	 * @return array<string,true>|null
+	 */
+	public function getMappedCardUris(int $ncAddressbookId): ?array {
+		try {
+			$uris = [];
+			foreach ($this->mapper->findForAddressBook($ncAddressbookId) as $row) {
+				$uris[$row->getNcCardUri()] = true;
+			}
+			return $uris;
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: failed to load contact map for address book ' . $ncAddressbookId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return null;
+		}
+	}
+
 	/** Number of mapping rows for an address book. Defensive: 0 on error. */
 	public function countForAddressBook(int $ncAddressbookId): int {
 		try {

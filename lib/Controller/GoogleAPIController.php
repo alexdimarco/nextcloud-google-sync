@@ -91,6 +91,19 @@ class GoogleAPIController extends Controller {
 	/**
 	 * @NoAdminRequired
 	 *
+	 * One-shot de-duplication of an address book (collapse stray copies of
+	 * Google-synced contacts). Returns {scanned, removed, ambiguous}.
+	 */
+	public function dedupeContacts(int $addressBookId): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse([], 400);
+		}
+		return new DataResponse($this->googleContactsAPIService->dedupeAddressBook($this->userId, $addressBookId));
+	}
+
+	/**
+	 * @NoAdminRequired
+	 *
 	 * @return DataResponse
 	 */
 	public function getCalendarList(): DataResponse {

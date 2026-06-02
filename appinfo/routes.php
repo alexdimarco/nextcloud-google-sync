@@ -33,5 +33,6 @@ return [
 		// Continuous contacts sync (Track 2, C0)
 		['name' => 'googleAPI#getNcAddressBooks', 'url' => '/nc-addressbooks', 'verb' => 'GET'],
 		['name' => 'googleAPI#setSyncContacts', 'url' => '/sync-contacts', 'verb' => 'POST'],
+		['name' => 'googleAPI#dedupeContacts', 'url' => '/dedupe-contacts', 'verb' => 'POST'],
 	]
 ];
