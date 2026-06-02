@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.12.0]
+
+### Added
+
+- **Outbound contacts sync — Nextcloud → Google, first slice (Track 2, C2a):
+  CREATE.** When contacts sync is on for an address book, a *new* contact you
+  create in Nextcloud is now pushed up to Google. It is gated behind a new
+  read-write `contacts` permission (you must **Disconnect** and **Sign in with
+  Google** again to grant it — until then nothing is written to Google), and
+  echo-suppressed so the contact isn't re-created or bounced back. Editing and
+  deleting Nextcloud contacts on the Google side, plus the edit-conflict
+  handling, land in the next slice; for now NC-side edits/deletes are detected
+  and logged but not yet pushed. See `docs/CONTACTS_SYNC.md`.
+
+### Hardened (pre-merge review)
+
+- A Google contact that is created but whose local mapping then fails to save
+  is now surfaced as an orphan and the change token is advanced past it, so it
+  can never be silently re-created as a duplicate on a later run.
+- A create response missing its `etag`, a thin/absent response `metadata`, and
+  a transient failure to re-read a mapped card are all handled defensively
+  (the contact is still mapped; no crash; no misclassification into a re-create).
+- Permanent (4xx) create rejections now log the Google error body, and
+  disabling contacts sync enforces the same address-book ownership check as
+  enabling it.
+
 ## [4.11.0]
 
 ### Added

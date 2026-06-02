@@ -55,5 +55,18 @@ class SyncContactsJob extends TimedJob {
 			echo ' done. +' . ($result['nbCreated'] ?? 0) . ' ~' . ($result['nbUpdated'] ?? 0)
 				. ' -' . ($result['nbDeleted'] ?? 0) . PHP_EOL;
 		}
+		// Outbound (NC -> Google) pass AFTER the committed inbound pass. Gated
+		// internally on the read-write contacts scope + address-book ownership;
+		// fully defensive (never throws), so it can't break the inbound result.
+		$out = $this->service->reconcileOutbound($userId, $addressBookId);
+		if (isset($out['error'])) {
+			$error = is_string($out['error']) ? $out['error'] : (string)json_encode($out['error']);
+			$this->logger->warning(
+				'Calendar Bridge: outbound contacts reconcile failed for address book ' . $addressBookId . ' (user ' . $userId . '): ' . $error,
+				['app' => Application::APP_ID],
+			);
+		} elseif (($out['created'] ?? 0) > 0) {
+			echo ' outbound +' . $out['created'] . PHP_EOL;
+		}
 	}
 }

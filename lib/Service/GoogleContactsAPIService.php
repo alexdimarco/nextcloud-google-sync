@@ -31,6 +31,24 @@ use Throwable;
  */
 class GoogleContactsAPIService {
 
+	// Outbound (NC -> Google) change classifications + write statuses, mirroring
+	// the calendar reconciler. See docs/CONTACTS_SYNC.md §3.
+	public const ECHO = 'echo';
+	public const LOCAL_NEW = 'local_new';
+	public const LOCAL_EDIT = 'local_edit';
+	public const LOCAL_EDIT_INDETERMINATE = 'local_edit_indeterminate';
+	public const LOCAL_DELETE = 'local_delete';
+	public const ECHO_DELETE = 'echo_delete';
+	public const CREATED = 'created';
+	// Created in Google but the local map row could NOT be persisted (a DB error
+	// the upsert's one retry didn't clear). The contact is an orphan; we MUST
+	// advance the token past it so it is never re-POSTed (createContact has no
+	// client id, so a replay would duplicate it). See reconcileOutbound.
+	public const CREATED_ORPHAN = 'created_orphan';
+	public const SKIPPED_GONE = 'skipped_gone';
+	public const SKIPPED_REJECTED = 'skipped_rejected';
+	public const ERROR = 'error';
+
 	public function __construct(
 		string $appName,
 		private LoggerInterface $logger,
@@ -803,6 +821,17 @@ class GoogleContactsAPIService {
 			}
 			$this->registerSyncContacts($userId, $addressBookId);
 		} else {
+			// Symmetric with the enable path. The controller only ever passes the
+			// authenticated user's own id (so unregister can touch only their own
+			// job/config today), but the guard keeps the gate honest against future
+			// callers and refuses to clear sync state on a book the user can't access.
+			if (!$this->ownsAddressBook($userId, $addressBookId)) {
+				$this->logger->warning(
+					'Calendar Bridge: refusing to disable contacts sync for address book ' . $addressBookId . ' not owned by ' . $userId,
+					['app' => Application::APP_ID],
+				);
+				return;
+			}
 			$this->unregisterSyncContacts($userId, $addressBookId);
 		}
 	}
@@ -976,5 +1005,398 @@ class GoogleContactsAPIService {
 			// unparseable -> empty identity, which matches nothing
 		}
 		return [$fn, $emails];
+	}
+
+	/**
+	 * Whether the user granted the read-write `contacts` scope (gates all outbound
+	 * NC -> Google contact writes; widen-and-gate — dormant until re-consent).
+	 */
+	public function hasContactsWriteScope(string $userId): bool {
+		$scopes = json_decode($this->config->getUserValue($userId, Application::APP_ID, 'user_scopes', '{}'), true);
+		return is_array($scopes) && ($scopes['can_write_contacts'] ?? 0) === 1;
+	}
+
+	/** Max outbound contact creates per run (cap-and-drain). Protected for test override. */
+	protected function contactsCreateBudget(): int {
+		return 50;
+	}
+
+	/**
+	 * Reconcile one address book OUTBOUND (Nextcloud -> Google): push genuinely
+	 * NC-origin new cards to Google as contacts (Track 2 C2a — CREATE only; edits
+	 * and deletes are classified + logged but deferred to a later phase). Gated on
+	 * the read-write contacts scope AND address-book ownership. Echo-suppressed via
+	 * the map's nc_etag baseline; cap-and-drain with hold-token-on-failure. Fully
+	 * defensive — runs after the (committed) inbound pass and must never break it.
+	 *
+	 * @return array{skipped?:string, error?:mixed, baselined?:string, rebaselined?:string, created?:int, advanced?:bool, counts?:array<string,int>}
+	 */
+	public function reconcileOutbound(string $userId, int $addressBookId): array {
+		try {
+			if (!$this->hasContactsWriteScope($userId)) {
+				return ['skipped' => 'no_write_scope'];
+			}
+			if (!$this->ownsAddressBook($userId, $addressBookId)) {
+				return ['error' => 'not your address book'];
+			}
+			$tokenKey = 'contacts_nc_token_' . $addressBookId;
+			$stored = $this->config->getUserValue($userId, Application::APP_ID, $tokenKey, '');
+			// First run: baseline at the current head and push NOTHING. Every card
+			// already in a sync-enabled address book is Google-origin (the inbound
+			// pass created it); there is no NC-origin bootstrap to bulk-push.
+			if ($stored === '') {
+				$head = $this->cdBackend->getChangesForAddressBook($addressBookId, '', 1);
+				$token = (string)(($head['syncToken'] ?? '') ?: '');
+				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
+				return ['baselined' => $token];
+			}
+			$changes = $this->cdBackend->getChangesForAddressBook($addressBookId, $stored, 1);
+			// Expired/unknown token (NC purged the change log) or a head lower than
+			// the stored token (address book recreated) -> re-baseline at head. The
+			// gap's changes are unrecoverable, but the map prevents duplicates.
+			if ($changes === null || (int)($changes['syncToken'] ?? 0) < (int)$stored) {
+				$fresh = $this->cdBackend->getChangesForAddressBook($addressBookId, '', 1);
+				$token = (string)(($fresh['syncToken'] ?? '') ?: '');
+				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, $token);
+				$this->logger->warning(
+					'Calendar Bridge: outbound contacts change token expired/stale for address book ' . $addressBookId . ', re-baselined',
+					['app' => Application::APP_ID],
+				);
+				return ['rebaselined' => $token];
+			}
+			// Load the whole map ONCE and FAIL CLOSED: classifying create-vs-not by a
+			// per-card lookup that returned null on a transient DB error would create
+			// a DUPLICATE Google contact (a mapped card mis-seen as LOCAL_NEW).
+			$mappedUris = $this->contactMapService->getMappedCardUris($addressBookId);
+			if ($mappedUris === null) {
+				return ['error' => 'could not load contact map'];
+			}
+			$advance = true;
+			// An orphan (created in Google but unmapped) FORCES the token forward even
+			// if a later card would otherwise hold it: replaying the batch would
+			// re-POST the orphan and duplicate it. Orphan-over-duplicate.
+			$mustAdvance = false;
+			$created = 0;
+			$counts = [];
+			foreach (['added', 'modified'] as $type) {
+				foreach (($changes[$type] ?? []) as $uri) {
+					$uri = (string)$uri;
+					if (!isset($mappedUris[$uri])) {
+						$cls = self::LOCAL_NEW;
+					} else {
+						// Mapped card: edit-vs-echo (log-only in C2a; nc_etag read only here).
+						// mapRowExists is TRUE because $uri is in $mappedUris (the bulk,
+						// fail-closed load) — NOT because $row !== null. A transient
+						// per-row read returning null must NOT downgrade to LOCAL_NEW
+						// (that would re-create a mapped card == a duplicate).
+						$row = $this->contactMapService->getRowForCard($addressBookId, $uri);
+						$card = $this->cdBackend->getCard($addressBookId, $uri);
+						if (!is_array($card)) {
+							// Couldn't read a card we know is mapped -> classify on stale
+							// data would be wrong; hold the token and retry next run
+							// (safe: a mapped card can never be re-created here).
+							$advance = false;
+							continue;
+						}
+						$currentEtag = isset($card['etag']) ? (string)$card['etag'] : null;
+						// NB (C2b): a card the INBOUND pass just wrote also surfaces here
+						// (origin='google'); it is mapped, so it can only be ECHO/EDIT,
+						// never LOCAL_NEW (no duplicate). classifyOutbound ignores the
+						// origin column today; C2b must consult it before PUSHING edits
+						// so an inbound write is never echoed back to Google.
+						$cls = self::classifyOutbound($type, true, $row?->getNcEtag(), $currentEtag);
+					}
+					$counts[$cls] = ($counts[$cls] ?? 0) + 1;
+					if ($cls === self::LOCAL_NEW) {
+						if ($created >= $this->contactsCreateBudget()) {
+							$advance = false; // cap-and-drain: hold token, drain next run
+							break 2;
+						}
+						$status = $this->createNcContactInGoogle($userId, $addressBookId, $uri);
+						if ($status === self::ERROR) {
+							$advance = false;
+						} elseif ($status === self::CREATED_ORPHAN) {
+							$mustAdvance = true;
+						}
+						$created++;
+						$this->logger->info(
+							'Calendar Bridge: outbound contact create ' . $uri . ' -> ' . $status,
+							['app' => Application::APP_ID],
+						);
+					} elseif ($cls !== self::ECHO) {
+						// LOCAL_EDIT / LOCAL_EDIT_INDETERMINATE -> a later phase (C2b).
+						$this->logger->info(
+							'Calendar Bridge: outbound contact ' . $cls . ' ' . $uri . ' (deferred)',
+							['app' => Application::APP_ID],
+						);
+					}
+				}
+			}
+			foreach (($changes['deleted'] ?? []) as $uri) {
+				$uri = (string)$uri;
+				$cls = isset($mappedUris[$uri]) ? self::LOCAL_DELETE : self::ECHO_DELETE;
+				$counts[$cls] = ($counts[$cls] ?? 0) + 1;
+				if ($cls === self::LOCAL_DELETE) {
+					$this->logger->info(
+						'Calendar Bridge: outbound contact delete ' . $uri . ' (deferred)',
+						['app' => Application::APP_ID],
+					);
+				}
+			}
+			// Advance the NC change token if every change was handled, OR if an
+			// orphan forces it (never replay a created-but-unmapped contact). The
+			// rare cost of $mustAdvance overriding a hold: a same-batch transient
+			// failure isn't retried until its card next changes — strictly safer
+			// than duplicating the orphan.
+			$advanced = $advance || $mustAdvance;
+			if ($advanced) {
+				$this->config->setUserValue($userId, Application::APP_ID, $tokenKey, (string)($changes['syncToken'] ?? $stored));
+			}
+			return ['created' => $created, 'advanced' => $advanced, 'counts' => $counts];
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound contacts reconcile failed for address book ' . $addressBookId . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return ['error' => $e->getMessage()];
+		}
+	}
+
+	/**
+	 * Pure classification of one NC card change for outbound sync. The contacts
+	 * analog of OutboundReconcileService::classifyChange. See docs/CONTACTS_SYNC.md §3.
+	 */
+	public static function classifyOutbound(string $changeType, bool $mapRowExists, ?string $mapNcEtag, ?string $currentEtag): string {
+		if ($changeType === 'deleted') {
+			// Our own inbound delete already dropped the map row, so a missing row
+			// means this delete is our echo.
+			return $mapRowExists ? self::LOCAL_DELETE : self::ECHO_DELETE;
+		}
+		if (!$mapRowExists) {
+			return self::LOCAL_NEW;
+		}
+		if ($mapNcEtag === null) {
+			return self::LOCAL_EDIT_INDETERMINATE;
+		}
+		// The card's current etag equal to the baseline we recorded on our last
+		// write == our own inbound echo; different == a genuine user edit.
+		return ($currentEtag !== null && $currentEtag === $mapNcEtag) ? self::ECHO : self::LOCAL_EDIT;
+	}
+
+	/**
+	 * Create a Google contact from an NC card, then record the map row (capturing
+	 * the create's NC echo baseline). The contacts twin of
+	 * OutboundWriteService::createLocalEventInGoogle. Returns a status constant.
+	 */
+	private function createNcContactInGoogle(string $userId, int $addressBookId, string $cardUri): string {
+		$card = $this->cdBackend->getCard($addressBookId, $cardUri);
+		if (!is_array($card)) {
+			return self::SKIPPED_GONE;
+		}
+		try {
+			$vcard = Reader::read((string)($card['carddata'] ?? ''));
+		} catch (Throwable $e) {
+			$this->logger->warning(
+				'Calendar Bridge: outbound create — unparseable card ' . $cardUri . ': ' . $e->getMessage(),
+				['app' => Application::APP_ID],
+			);
+			return self::SKIPPED_REJECTED;
+		}
+		$person = self::buildPersonFromVCard($vcard);
+		if ($person === []) {
+			// Nothing Google will accept (no name/email/phone/…). Terminal, not a
+			// retry — re-POSTing an always-rejected body would wedge the token.
+			return self::SKIPPED_REJECTED;
+		}
+		// personFields is a QUERY param; the body is the raw Person object.
+		$endpoint = 'v1/people:createContact?personFields=' . rawurlencode($this->connectionsPersonFields());
+		$result = $this->googleApiService->request($userId, $endpoint, $person, 'POST', 'https://people.googleapis.com/');
+		if (isset($result['error'])) {
+			$status = isset($result['statusCode']) ? (int)$result['statusCode'] : null;
+			$errStr = is_string($result['error']) ? $result['error'] : (string)json_encode($result['error']);
+			if (self::isPermanentBodyRejection($status)) {
+				$this->logger->warning(
+					'Calendar Bridge: outbound create permanently rejected (' . $status . ') for ' . $cardUri . '; left one-way: ' . $errStr,
+					['app' => Application::APP_ID],
+				);
+				return self::SKIPPED_REJECTED;
+			}
+			$this->logger->warning(
+				'Calendar Bridge: outbound create failed for ' . $cardUri . ' (status ' . ($status ?? '?') . '): ' . $errStr,
+				['app' => Application::APP_ID],
+			);
+			return self::ERROR;
+		}
+		$resourceName = (string)($result['resourceName'] ?? '');
+		if ($resourceName === '') {
+			$this->logger->warning(
+				'Calendar Bridge: outbound create returned no resourceName for ' . $cardUri,
+				['app' => Application::APP_ID],
+			);
+			return self::ERROR;
+		}
+		$etag = isset($result['etag']) ? (string)$result['etag'] : null;
+		if ($etag === null) {
+			// Documented to always be returned; if it ever isn't, the row is still
+			// recorded (resourceName maps it — not recording would orphan it). The
+			// null Google baseline only costs one redundant inbound apply (which then
+			// sets the baseline); outbound echo suppression rests on nc_etag below.
+			$this->logger->warning(
+				'Calendar Bridge: outbound create for ' . $cardUri . ' returned no etag; mapping with a null Google baseline',
+				['app' => Application::APP_ID],
+			);
+		}
+		// Guard each level: a thin/absent metadata would otherwise raise E_WARNING on
+		// the intermediate keys (?? only guards the last), and a strict error handler
+		// could turn that into a throw.
+		$sources = (is_array($result['metadata'] ?? null) && is_array($result['metadata']['sources'] ?? null))
+			? $result['metadata']['sources'] : [];
+		$updateTime = (isset($sources[0]) && is_array($sources[0])) ? ($sources[0]['updateTime'] ?? null) : null;
+		// Re-read the card to capture its CURRENT etag as the nc echo baseline (the
+		// single load-bearing line: it makes a held-token replay classify ECHO, not
+		// a spurious edit, so no duplicate Google contact).
+		$fresh = $this->cdBackend->getCard($addressBookId, $cardUri);
+		$recorded = $this->contactMapService->recordMapping(
+			$addressBookId,
+			$cardUri,
+			$resourceName,
+			$etag,
+			is_string($updateTime) ? $updateTime : null,
+			is_array($fresh) ? (int)($fresh['lastmodified'] ?? 0) : null,
+			is_array($fresh) ? (string)($fresh['etag'] ?? '') : null,
+			'nc',
+		);
+		if (!$recorded) {
+			// The contact IS in Google but we couldn't map it. Re-POSTing would
+			// duplicate it (no client id), so the caller must advance past it; we
+			// surface the orphan loudly for operators.
+			$this->logger->error(
+				'Calendar Bridge: created Google contact ' . $resourceName . ' for ' . $cardUri
+					. ' but FAILED to record its mapping — orphan (will not be re-created or further synced)',
+				['app' => Application::APP_ID],
+			);
+			return self::CREATED_ORPHAN;
+		}
+		return self::CREATED;
+	}
+
+	private static function isPermanentBodyRejection(?int $status): bool {
+		return $status === 400 || $status === 422;
+	}
+
+	/**
+	 * Build a Google People `Person` body from an NC vCard — the reverse of
+	 * {@see buildVCardFromPerson}. Emits only the fields C2 round-trips (names,
+	 * emails, phones, addresses, organizations, note, urls); never emits
+	 * etag/metadata/resourceName/primary/output-only fields. Returns [] when
+	 * nothing mappable is present (caller treats that as a terminal skip).
+	 *
+	 * @return array<string,mixed>
+	 */
+	public static function buildPersonFromVCard(VCard $vcard): array {
+		$person = [];
+
+		$name = [];
+		if (isset($vcard->N)) {
+			$parts = $vcard->N->getParts(); // [family, given, additional, prefix, suffix]
+			if (($parts[1] ?? '') !== '') {
+				$name['givenName'] = (string)$parts[1];
+			}
+			if (($parts[0] ?? '') !== '') {
+				$name['familyName'] = (string)$parts[0];
+			}
+			if (($parts[2] ?? '') !== '') {
+				$name['middleName'] = (string)$parts[2];
+			}
+			if (($parts[3] ?? '') !== '') {
+				$name['honorificPrefix'] = (string)$parts[3];
+			}
+			if (($parts[4] ?? '') !== '') {
+				$name['honorificSuffix'] = (string)$parts[4];
+			}
+		}
+		if (isset($vcard->FN) && (string)$vcard->FN !== '') {
+			$name['unstructuredName'] = (string)$vcard->FN;
+		}
+		if ($name !== []) {
+			$person['names'] = [$name];
+		}
+
+		foreach (($vcard->EMAIL ?? []) as $email) {
+			$val = trim((string)$email);
+			if ($val === '') {
+				continue;
+			}
+			$entry = ['value' => $val];
+			$type = strtolower(trim((string)($email['TYPE'] ?? '')));
+			if ($type !== '') {
+				$entry['type'] = $type;
+			}
+			$person['emailAddresses'][] = $entry;
+		}
+
+		foreach (($vcard->TEL ?? []) as $tel) {
+			$val = trim((string)$tel);
+			if ($val === '') {
+				continue;
+			}
+			$entry = ['value' => $val];
+			$type = str_replace('cell', 'mobile', strtolower(trim((string)($tel['TYPE'] ?? '')))); // reverse of the importer's mobile->cell
+			if ($type !== '') {
+				$entry['type'] = $type;
+			}
+			$person['phoneNumbers'][] = $entry;
+		}
+
+		foreach (($vcard->ADR ?? []) as $adr) {
+			$p = $adr->getParts(); // [poBox, extended, street, city, region, postalCode, country]
+			$entry = array_filter([
+				'poBox' => (string)($p[0] ?? ''),
+				'extendedAddress' => (string)($p[1] ?? ''),
+				'streetAddress' => (string)($p[2] ?? ''),
+				'city' => (string)($p[3] ?? ''),
+				'region' => (string)($p[4] ?? ''),
+				'postalCode' => (string)($p[5] ?? ''),
+				'country' => (string)($p[6] ?? ''),
+			], static fn ($v) => $v !== '');
+			if ($entry === []) {
+				continue;
+			}
+			$type = strtolower(trim((string)($adr['TYPE'] ?? '')));
+			if ($type !== '') {
+				$entry['type'] = $type;
+			}
+			$person['addresses'][] = $entry;
+		}
+
+		$org = [];
+		if (isset($vcard->ORG) && (string)$vcard->ORG !== '') {
+			$org['name'] = (string)$vcard->ORG;
+		}
+		if (isset($vcard->TITLE) && (string)$vcard->TITLE !== '') {
+			$org['title'] = (string)$vcard->TITLE;
+		}
+		if ($org !== []) {
+			$person['organizations'] = [$org];
+		}
+
+		if (isset($vcard->NOTE) && (string)$vcard->NOTE !== '') {
+			$person['biographies'] = [['value' => (string)$vcard->NOTE, 'contentType' => 'TEXT_PLAIN']];
+		}
+
+		foreach (($vcard->URL ?? []) as $url) {
+			$val = trim((string)$url);
+			if ($val === '') {
+				continue;
+			}
+			$entry = ['value' => $val];
+			$type = strtolower(trim((string)($url['TYPE'] ?? '')));
+			if ($type !== '') {
+				$entry['type'] = $type;
+			}
+			$person['urls'][] = $entry;
+		}
+
+		return $person;
 	}
 }
