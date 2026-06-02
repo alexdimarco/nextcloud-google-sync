@@ -81,6 +81,19 @@
 						</NcButton>
 						<br>
 					</div>
+					<br>
+					<div v-if="ncAddressBooks.length > 0">
+						<label class="cb-hint">
+							{{ t('outside_provider_calendar_bridge', 'Continuously sync your Google contacts into a Nextcloud address book (Google → Nextcloud):') }}
+						</label>
+						<NcCheckboxRadioSwitch v-for="ab in ncAddressBooks"
+							:key="ab.id"
+							:model-value="ab.isSyncEnabled"
+							:loading="loadingSyncContacts[ab.id]"
+							@update:model-value="onSyncContactsChange(ab)">
+							{{ ab.displayname }}
+						</NcCheckboxRadioSwitch>
+					</div>
 				</div>
 				<div v-if="calendars.length > 0">
 					<h3>{{ t('outside_provider_calendar_bridge', 'Calendars') }}</h3>
@@ -234,6 +247,9 @@ export default {
 			selectedAddressBook: 0,
 			newAddressBookName: 'Google Contacts import',
 			importingContacts: false,
+			// continuous contacts sync (Google -> NC)
+			ncAddressBooks: [],
+			loadingSyncContacts: {},
 		}
 	},
 
@@ -287,6 +303,7 @@ export default {
 				}
 				if (this.state.user_scopes.can_access_contacts) {
 					this.getNbGoogleContacts()
+					this.getNcAddressBooks()
 				}
 			}
 		},
@@ -506,6 +523,36 @@ export default {
 					)
 				})
 				.then(() => {
+				})
+		},
+		getNcAddressBooks() {
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/nc-addressbooks')
+			axios.get(url)
+				.then((response) => {
+					if (Array.isArray(response.data)) {
+						this.ncAddressBooks = response.data
+					}
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to list address books'))
+				})
+		},
+		onSyncContactsChange(ab) {
+			const desired = !ab.isSyncEnabled
+			this.loadingSyncContacts[ab.id] = true
+			const url = generateUrl('/apps/outside_provider_calendar_bridge/sync-contacts')
+			axios.post(url, { addressBookId: ab.id, enabled: desired })
+				.then(() => {
+					ab.isSyncEnabled = desired
+					showSuccess(desired
+						? t('outside_provider_calendar_bridge', 'Contacts sync enabled')
+						: t('outside_provider_calendar_bridge', 'Contacts sync disabled'))
+				})
+				.catch((error) => {
+					showServerError(error, t('outside_provider_calendar_bridge', 'Failed to change contacts sync'))
+				})
+				.finally(() => {
+					this.loadingSyncContacts[ab.id] = false
 				})
 		},
 		getLocalAddressBooks() {

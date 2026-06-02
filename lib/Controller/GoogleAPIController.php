@@ -66,6 +66,31 @@ class GoogleAPIController extends Controller {
 	/**
 	 * @NoAdminRequired
 	 *
+	 * List the user's writable address books with their "Sync contacts" state.
+	 */
+	public function getNcAddressBooks(): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse([], 400);
+		}
+		return new DataResponse($this->googleContactsAPIService->getOwnAddressBooks($this->userId));
+	}
+
+	/**
+	 * @NoAdminRequired
+	 *
+	 * Turn continuous Google -> Nextcloud contacts sync on/off for an address book.
+	 */
+	public function setSyncContacts(int $addressBookId, bool $enabled): DataResponse {
+		if ($this->accessToken === '' || $this->userId === null) {
+			return new DataResponse([], 400);
+		}
+		$this->googleContactsAPIService->setSyncContacts($this->userId, $addressBookId, $enabled);
+		return new DataResponse(['addressBookId' => $addressBookId, 'enabled' => $enabled]);
+	}
+
+	/**
+	 * @NoAdminRequired
+	 *
 	 * @return DataResponse
 	 */
 	public function getCalendarList(): DataResponse {

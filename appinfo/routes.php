@@ -30,5 +30,8 @@ return [
 		['name' => 'googleAPI#deleteLinkedCalendars', 'url' => '/linked-calendars', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#resetRegisteredSyncCalendar', 'url' => '/reset-sync-calendar', 'verb' => 'DELETE'],
 		['name' => 'googleAPI#importContacts', 'url' => '/import-contacts', 'verb' => 'GET'],
+		// Continuous contacts sync (Track 2, C0)
+		['name' => 'googleAPI#getNcAddressBooks', 'url' => '/nc-addressbooks', 'verb' => 'GET'],
+		['name' => 'googleAPI#setSyncContacts', 'url' => '/sync-contacts', 'verb' => 'POST'],
 	]
 ];
