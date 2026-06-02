@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.9.0]
+
+### Added
+
+- **Contacts sync foundation (Track 2, C0).** A new `calbridge_contacts_map`
+  identity table (Nextcloud card ↔ Google People `resourceName`, with the
+  etag/updateTime baselines needed for echo-suppression and conflict
+  resolution) and a defensive `ContactMapService`. The Google Contacts import
+  now records a mapping row for every card it writes, laying the groundwork for
+  continuous incremental sync, de-duplication, and two-way contacts sync. No
+  user-visible change yet — see `docs/CONTACTS_SYNC.md` for the design.
+
 ## [4.8.0]
 
 ### Removed

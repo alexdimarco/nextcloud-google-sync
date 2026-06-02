@@ -35,6 +35,7 @@ class GoogleContactsAPIService {
 		private CardDavBackend $cdBackend,
 		private GoogleAPIService $googleApiService,
 		private IConfig $config,
+		private ContactMapService $contactMapService,
 	) {
 	}
 
@@ -219,7 +220,10 @@ class GoogleContactsAPIService {
 				$this->logger->debug('Skipping contact with no resourceName', ['contact' => $c, 'app' => Application::APP_ID]);
 				continue;
 			}
-			// contacts are not displayed in the Contacts app if there are slashes in their URI...
+			// The RAW resourceName (people/{id}) is Google's stable identity, stored
+			// in the contact map; the slash-sanitized form is the NC card URI
+			// (contacts are not shown in the Contacts app if their URI has slashes).
+			$rawResourceName = (string)$googleResourceName;
 			$googleResourceName = str_replace('/', '_', $googleResourceName);
 
 			// check if contact exists and needs to be updated
@@ -240,6 +244,8 @@ class GoogleContactsAPIService {
 
 					if ($googleUpdateTimestamp <= $existingContact['lastmodified']) {
 						$this->logger->debug('Skipping existing contact which is up-to-date', ['contact' => $c, 'app' => Application::APP_ID]);
+						// Backfill/refresh the identity map even when the card is current.
+						$this->recordContactMapRow($key, $googleResourceName, $rawResourceName, $c, $existingContact);
 						continue;
 					}
 				}
@@ -481,6 +487,12 @@ class GoogleContactsAPIService {
 					$this->logger->warning('Error when updating contact', ['exception' => $e, 'contact' => $c, 'app' => Application::APP_ID]);
 				}
 			}
+			// Record the identity mapping (Track 2 foundation) for the card we just
+			// wrote — best effort; skipped if the write failed (no card to read).
+			$freshCard = $this->cdBackend->getCard($key, $googleResourceName);
+			if (is_array($freshCard)) {
+				$this->recordContactMapRow($key, $googleResourceName, $rawResourceName, $c, $freshCard);
+			}
 		}
 		$this->logger->debug($totalContactNumber . ' contacts seen', ['app' => Application::APP_ID]);
 		$this->logger->debug($nbAdded . ' contacts imported', ['app' => Application::APP_ID]);
@@ -493,5 +505,29 @@ class GoogleContactsAPIService {
 			'nbAdded' => $nbAdded,
 			'nbUpdated' => $nbUpdated,
 		];
+	}
+
+	/**
+	 * Record/refresh the identity-map row for one imported card (Track 2). Stores
+	 * the RAW Google resourceName as the authoritative id, the Google etag +
+	 * updateTime as the inbound baselines, and the NC card's etag/lastmodified as
+	 * the NC baselines. Best-effort: ContactMapService swallows DB errors.
+	 *
+	 * @param array<string,mixed> $googleContact the People API person ($c)
+	 * @param array<string,mixed> $ncCard the CardDavBackend card row (getCard result)
+	 */
+	private function recordContactMapRow(int $addressBookId, string $cardUri, string $rawResourceName, array $googleContact, array $ncCard): void {
+		$etag = isset($googleContact['etag']) ? (string)$googleContact['etag'] : null;
+		$updateTime = $googleContact['metadata']['sources'][0]['updateTime'] ?? null;
+		$this->contactMapService->recordMapping(
+			$addressBookId,
+			$cardUri,
+			$rawResourceName,
+			$etag,
+			is_string($updateTime) ? $updateTime : null,
+			isset($ncCard['lastmodified']) ? (int)$ncCard['lastmodified'] : null,
+			isset($ncCard['etag']) ? (string)$ncCard['etag'] : null,
+			'google',
+		);
 	}
 }
