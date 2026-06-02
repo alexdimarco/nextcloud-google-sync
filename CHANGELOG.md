@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   handling, land in the next slice; for now NC-side edits/deletes are detected
   and logged but not yet pushed. See `docs/CONTACTS_SYNC.md`.
 
+### Hardened (pre-merge review)
+
+- A Google contact that is created but whose local mapping then fails to save
+  is now surfaced as an orphan and the change token is advanced past it, so it
+  can never be silently re-created as a duplicate on a later run.
+- A create response missing its `etag`, a thin/absent response `metadata`, and
+  a transient failure to re-read a mapped card are all handled defensively
+  (the contact is still mapped; no crash; no misclassification into a re-create).
+- Permanent (4xx) create rejections now log the Google error body, and
+  disabling contacts sync enforces the same address-book ownership check as
+  enabling it.
+
 ## [4.11.0]
 
 ### Added

@@ -89,6 +89,19 @@ $writeSvc = new class('outside_provider_calendar_bridge', $logger, $cm, $cd, $fa
 		return true;
 	}
 };
+// orphanSvc: a ContactMapService whose recordMapping always FAILS (simulates a
+// DB write that the upsert's retry can't clear), to exercise the orphan path.
+$mapper = $c->get(\OCA\CalendarBridge\Db\ContactMapMapper::class);
+$failCms = new class($mapper, $logger) extends ContactMapService {
+	public function recordMapping(int $ncAddressbookId, string $ncCardUri, string $googleResourceName, ?string $baselineEtag = null, ?string $googleUpdated = null, ?int $ncLastmodified = null, ?string $ncEtag = null, string $origin = 'google'): bool {
+		return false;
+	}
+};
+$orphanSvc = new class('outside_provider_calendar_bridge', $logger, $cm, $cd, $fault, $config, $failCms, $jobList) extends GoogleContactsAPIService {
+	public function hasContactsWriteScope(string $userId): bool {
+		return true;
+	}
+};
 
 $ab = $cd->createAddressBook($principal, 'cb-ob-' . $run, ['{DAV:}displayname' => 'CB-outbound-' . $run]);
 $tokKey = 'contacts_nc_token_' . $ab;
@@ -149,6 +162,33 @@ try {
 	$fault->created = [];
 	$re = $writeSvc->reconcileOutbound($USER, $ab);
 	$check('no POST (empty Person), token advanced (not wedged)', count($fault->created) === 0 && ($re['advanced'] ?? false) === true && $cms->getRowForCard($ab, 'nc-empty') === null);
+
+	// ===== Missing etag in the create response: still mapped (no orphan), warned =====
+	echo "\nCreate response missing etag\n";
+	$cd->createCard($ab, 'nc-noetag', $vcard('nc-noetag', 'No Etag', 'noetag@example.com'));
+	$fault->created = [];
+	$fault->createQueue = [['resourceName' => 'people/cNOE' . $run, 'metadata' => ['sources' => [['updateTime' => '2026-06-02T00:00:00Z']]]]]; // no 'etag'
+	$rn = $writeSvc->reconcileOutbound($USER, $ab);
+	$rowNoEtag = $cms->getRowForCard($ab, 'nc-noetag');
+	$check('created + mapped despite missing etag (null Google baseline, nc_etag set)',
+		($rn['created'] ?? 0) === 1 && ($rn['advanced'] ?? false) === true
+		&& $rowNoEtag !== null && $rowNoEtag->getBaselineEtag() === null && (string)$rowNoEtag->getNcEtag() !== '');
+
+	// ===== recordMapping FAILS -> CREATED_ORPHAN, token advances (no re-POST/dup) =====
+	echo "\nMap-write failure -> orphan (no duplicate on replay)\n";
+	$cd->createCard($ab, 'nc-orphan', $vcard('nc-orphan', 'Orphan Person', 'orphan@example.com'));
+	$fault->created = [];
+	$fault->createQueue = [['resourceName' => 'people/cORPH' . $run, 'etag' => 'getagO', 'metadata' => ['sources' => [['updateTime' => '2026-06-02T00:00:00Z']]]]];
+	$ro = $orphanSvc->reconcileOutbound($USER, $ab);
+	$check('1 POST, advanced=true (orphan forces token forward), NO map row',
+		count($fault->created) === 1 && ($ro['created'] ?? 0) === 1 && ($ro['advanced'] ?? false) === true
+		&& $cms->getRowForCard($ab, 'nc-orphan') === null);
+	// Token advanced past the orphan -> a normal next run does not re-surface it as
+	// 'added', so it is never re-POSTed (the duplicate the advance prevents).
+	$fault->created = [];
+	$fault->createQueue = [];
+	$ro2 = $writeSvc->reconcileOutbound($USER, $ab);
+	$check('next run does NOT re-create the orphan (no duplicate POST)', count($fault->created) === 0 && ($ro2['created'] ?? 0) === 0);
 } finally {
 	$cms->removeForAddressBook($ab);
 	$config->deleteUserValue($USER, $APP, $tokKey);
