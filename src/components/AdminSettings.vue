@@ -61,7 +61,7 @@
 				</div>
 			</li>
 			<li>
-				{{ t('outside_provider_calendar_bridge', 'Finally, go to "APIs & Services" => "Library" and add the following APIs: "Google Drive API", "Google Calendar API", and "People API".') }}
+				{{ t('outside_provider_calendar_bridge', 'Finally, go to "APIs & Services" => "Library" and add the following APIs: "Google Calendar API" and "People API".') }}
 			</li>
 			<li>
 				{{ t('outside_provider_calendar_bridge', 'Your Nextcloud users will then see a "Connect to Google" button in their personal settings.') }}

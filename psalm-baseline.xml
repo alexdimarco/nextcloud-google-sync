@@ -11,11 +11,6 @@
       <code><![CDATA[CalendarRestoredEvent]]></code>
     </UndefinedClass>
   </file>
-  <file src="lib/BackgroundJob/ImportDriveJob.php">
-    <MissingOverrideAttribute>
-      <code><![CDATA[public function run($argument) {]]></code>
-    </MissingOverrideAttribute>
-  </file>
   <file src="lib/Listener/CalendarPairingListener.php">
     <UndefinedClass>
       <code><![CDATA[CalendarDeletedEvent]]></code>
@@ -158,14 +153,6 @@
       <code><![CDATA[private]]></code>
     </UndefinedClass>
   </file>
-  <file src="lib/Service/GoogleDriveAPIService.php">
-    <ImplicitToStringCast>
-      <code><![CDATA[$e]]></code>
-    </ImplicitToStringCast>
-    <InvalidArgument>
-      <code><![CDATA[$ts]]></code>
-    </InvalidArgument>
-  </file>
   <file src="lib/Service/MapVerifyService.php">
     <MissingDependency>
       <code><![CDATA[$this->caldavBackend]]></code>
@@ -252,9 +239,6 @@
       <code><![CDATA[public function getPriority(): int {]]></code>
       <code><![CDATA[public function getSection(): string {]]></code>
     </MissingOverrideAttribute>
-    <UndefinedDocblockClass>
-      <code><![CDATA[NoUserException]]></code>
-    </UndefinedDocblockClass>
   </file>
   <file src="lib/Settings/PersonalSection.php">
     <MissingOverrideAttribute>

@@ -10,23 +10,23 @@ calendars** in sync. It can pull your Google events into Nextcloud, push your
 Nextcloud changes back up to Google, and even create a brand-new Google
 calendar that mirrors one you already have in Nextcloud.
 
-The app also inherits two **import** features from the upstream Google
-integration it was forked from — **Contacts** and **Drive** — which are
-documented here for completeness (sections 9 and 10).
+The app also inherits one **import** feature from the upstream Google
+integration it was forked from — **Contacts** — which is documented here for
+completeness (section 9).
 
 This guide is for **end users**. If you are a Nextcloud administrator setting
 the app up for the first time (creating the Google OAuth app, configuring the
 Client ID / Client secret, choosing pop-up vs. redirect, enabling Cron and the
 required Google APIs), read the [Install & Admin Guide](INSTALL.md) first — this
-manual does **not** duplicate that server setup (see section 16 for a pointer).
+manual does **not** duplicate that server setup (see section 15 for a pointer).
 
 > **What's actively developed and tested.** This fork's focus is the **calendar**
 > sync described in sections 5–8 — that is the part that is actively developed
-> and verified. The **Contacts** and **Drive** importers (sections 9–10) are
-> carried over unchanged from the upstream app; they require your administrator
-> to have enabled the corresponding Google APIs, and they are **outside this
-> fork's calendar focus** (not independently verified here). They are documented
-> so you understand every control you may see on the screen.
+> and verified. The **Contacts** importer (section 9) is carried over unchanged
+> from the upstream app; it requires your administrator to have enabled the
+> Google People API, and it is **outside this fork's calendar focus** (not
+> independently verified here). It is documented so you understand every control
+> you may see on the screen.
 
 ---
 
@@ -41,13 +41,12 @@ manual does **not** duplicate that server setup (see section 16 for a pointer).
 7. [Creating a Google calendar from a Nextcloud one](#7-creating-a-google-calendar-from-a-nextcloud-one)
 8. [Trashing and restoring a linked calendar](#8-trashing-and-restoring-a-linked-calendar)
 9. [Importing Google Contacts (inherited feature)](#9-importing-google-contacts-inherited-feature)
-10. [Importing Google Drive files (inherited feature)](#10-importing-google-drive-files-inherited-feature)
-11. [How conflicts are resolved](#11-how-conflicts-are-resolved)
-12. [How often it syncs](#12-how-often-it-syncs)
-13. [Limitations and good-to-knows](#13-limitations-and-good-to-knows)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Privacy: what is sent to Google](#15-privacy-what-is-sent-to-google)
-16. [For administrators](#16-for-administrators)
+10. [How conflicts are resolved](#10-how-conflicts-are-resolved)
+11. [How often it syncs](#11-how-often-it-syncs)
+12. [Limitations and good-to-knows](#12-limitations-and-good-to-knows)
+13. [Troubleshooting](#13-troubleshooting)
+14. [Privacy: what is sent to Google](#14-privacy-what-is-sent-to-google)
+15. [For administrators](#15-for-administrators)
 
 ---
 
@@ -65,8 +64,7 @@ title). From there you can:
 - **Create** a new Google calendar from one of your existing Nextcloud
   calendars and keep them paired.
 - **Disconnect** or **delete** a linked calendar pair.
-- (Inherited) **Import Google Contacts** into a Nextcloud address book, and
-  **import Google Drive files** into a Nextcloud folder.
+- (Inherited) **Import Google Contacts** into a Nextcloud address book.
 
 What you need before you start:
 
@@ -78,16 +76,16 @@ What you need before you start:
   When you see that message, there is nothing you can do until your admin
   finishes the setup described in [INSTALL.md](INSTALL.md).
 - A Google account with one or more calendars.
-- For the Contacts and Drive importers, your administrator must additionally
-  have enabled the **Google People API** and **Google Drive API** in the Google
-  Cloud project (see section 14 if you hit a "this API … is disabled" error).
+- For the Contacts importer, your administrator must additionally have enabled
+  the **Google People API** in the Google Cloud project (see section 13 if you
+  hit a "this API … is disabled" error).
 
 > **Important design promise:** Calendar Bridge does **nothing** with your
 > Google account until you personally click **"Sign in with Google"**. There
 > are no automatic or background operations before you connect. And even once
 > connected, **nothing is written to Google** until you explicitly turn on
 > two-way sync for a specific calendar. See
-> [Privacy](#15-privacy-what-is-sent-to-google).
+> [Privacy](#14-privacy-what-is-sent-to-google).
 
 ---
 
@@ -116,8 +114,8 @@ When your admin has configured the OAuth app, the settings screen shows an
   account name.
 - A **"Disconnect from Google"** button (see below).
 - Depending on the permissions you granted, additional subsections appear:
-  **"Contacts"**, **"Calendars"** (your Google calendars), **"Your Nextcloud
-  calendars"**, and **"Drive"**.
+  **"Contacts"**, **"Calendars"** (your Google calendars), and **"Your Nextcloud
+  calendars"**.
 
 Connecting typically takes only a few seconds after you approve on Google's
 side.
@@ -152,9 +150,8 @@ The permissions that matter for the **calendar** features are:
   your pre-existing Google calendars). This unlocks the **"Create in Google +
   sync"** feature. Internally this is the **`can_create_calendar`** flag.
 
-The inherited importers use their own permissions — contacts access (for
-**Contacts**) and Drive access (for **Drive**) — which are also requested at
-sign-in.
+The inherited **Contacts** importer uses its own contacts-access permission,
+which is also requested at sign-in.
 
 > **Widen-and-gate / when to reconnect.** Your granted permissions are recorded
 > at the moment you sign in and are **completely overwritten only when you sign
@@ -237,13 +234,6 @@ you granted.
 See [section 7](#7-creating-a-google-calendar-from-a-nextcloud-one) for full
 instructions on each of these.
 
-### 4.5 "Drive" subsection (inherited)
-
-- Shown once you are connected (and your Drive size could be read).
-- Options for the import (ignore shared files, Google-document export format,
-  target folders) and an **"Import Google Drive files"** button. See
-  [section 10](#10-importing-google-drive-files-inherited-feature).
-
 ---
 
 ## 5. Google → Nextcloud: Import vs. Sync, Sync all, status markers
@@ -284,7 +274,7 @@ What gets imported for each event: the summary/title, location, description,
 colors, time zones, organizer, reminders, recurrence rules (repeating events),
 and recurrence exceptions (deleted/moved single occurrences). Attendees are
 imported for display, but attendee/guest-list edits are **not** synced back to
-Google (see [Limitations](#13-limitations-and-good-to-knows)). If Google marks
+Google (see [Limitations](#12-limitations-and-good-to-knows)). If Google marks
 an event as **private**, it is imported with a generic title.
 
 ### "Sync all"
@@ -500,52 +490,11 @@ To import:
 
 If the People API isn't enabled for the project, this section will report a
 Google error instead of a contact count — see
-[Troubleshooting](#14-troubleshooting).
+[Troubleshooting](#13-troubleshooting).
 
 ---
 
-## 10. Importing Google Drive files (inherited feature)
-
-> **Inherited / not part of the calendar focus.** This importer is carried over
-> from the upstream Google integration. It requires your administrator to have
-> enabled the **Google Drive API** in the Google Cloud project and to have left
-> the Drive permission in the sign-in request. It is documented for
-> completeness and has **not** been independently verified in this fork. **If
-> the Drive API is not enabled, this section will repeatedly show an error** —
-> see [Troubleshooting](#14-troubleshooting).
-
-The **"Drive"** subsection copies your Google Drive files into a folder in your
-Nextcloud Files, as a background job.
-
-Options (set them before starting the import):
-
-- **"Ignore shared files"** toggle — skip files that were shared *with* you.
-- **"Google documents import format"** — choose how Google-format documents
-  (Docs/Sheets/Slides) are converted on the way in:
-  **"OpenXML (docx, xlsx, pptx)"** or **"OpenDocument (odt, ods, odp)"**.
-- **"Import directory"** — the Nextcloud folder your Drive files go into. Click
-  the pencil button next to it to change the path.
-- **"Shared files import directory"** — a separate target folder for
-  shared-with-you files; also editable via its pencil button.
-
-The section also shows your total Drive size — **"Your Google Drive ({size})"**
-(or **"Your Google Drive ({size} + {shared} shared with you)"**) — and, if your
-Drive is larger than your free Nextcloud space, the warning **"Your Google Drive
-is bigger than your remaining space left ({space})"**.
-
-To import:
-
-1. Adjust the options above to taste.
-2. Click **"Import Google Drive files"**.
-3. A background job starts: you'll see **"Google Drive background import process
-   will begin soon. You can close this page…"**, then live progress like
-   **"{amount} files imported ({progress}%)"**, and a **"Last Google Drive
-   import job at {date}"** timestamp.
-4. To stop an in-progress import, click **"Cancel Google Drive import"**.
-
----
-
-## 11. How conflicts are resolved
+## 10. How conflicts are resolved
 
 When the same event changes on both sides, Calendar Bridge uses
 **last-writer-wins (LWW)** based on each side's update time:
@@ -573,7 +522,7 @@ Other safety behaviors:
 
 ---
 
-## 12. How often it syncs
+## 11. How often it syncs
 
 - **Imports** (the **"Import calendar"** button) happen immediately when you
   click, once.
@@ -584,11 +533,11 @@ Other safety behaviors:
   jobs. For reliable two-way sync, your administrator should have Nextcloud set
   to **Cron** (not AJAX). If it's set to AJAX, syncing may only happen while
   someone is actively using Nextcloud and can stall for long periods. See
-  [Troubleshooting](#14-troubleshooting).
+  [Troubleshooting](#13-troubleshooting).
 
 ---
 
-## 13. Limitations and good-to-knows
+## 12. Limitations and good-to-knows
 
 - **Read-only calendars can't be two-way.** You need *owner* or *writer* access
   on the Google calendar. Read-only calendars can only be imported/synced
@@ -625,12 +574,12 @@ Other safety behaviors:
 - **Linking creates an empty Google calendar.** **"Create in Google + sync"**
   makes a *new* Google calendar; it does not merge into an existing one. Your
   Nextcloud events then drain into it gradually.
-- **Contacts and Drive are one-time imports, not sync** (sections 9–10), and
-  depend on extra Google APIs being enabled by your admin.
+- **Contacts is a one-time import, not sync** (section 9), and depends on the
+  Google People API being enabled by your admin.
 
 ---
 
-## 14. Troubleshooting
+## 13. Troubleshooting
 
 **Nothing is syncing, or it only syncs when someone is using Nextcloud.**
 This usually means background jobs are set to **AJAX** instead of **Cron**. Ask
@@ -650,15 +599,13 @@ You're likely missing the matching Google permission. Reconnect to grant it:
 **"Create in Google + sync"** needs both create and write access; the two-way
 toggle needs write access.
 
-**The "Contacts" or "Drive" section shows an error like "… API has not been
+**The "Contacts" section shows an error like "Google People API has not been
 used in project … before or it is disabled."**
-That Google API isn't enabled for your deployment. The **Drive** section in
-particular calls the **Google Drive API** as soon as it loads, so the error can
-appear repeatedly; the **Contacts** section needs the **Google People API**.
-These importers are inherited from the upstream app and are outside this fork's
-calendar focus. **Fix (admin):** either enable the corresponding API in the
-Google Cloud project (**APIs & Services → Library**), or simply ignore those
-sections if you only use the calendar features.
+The People API isn't enabled for your deployment. The Contacts importer is
+inherited from the upstream app and is outside this fork's calendar focus.
+**Fix (admin):** either enable the **Google People API** in the Google Cloud
+project (**APIs & Services → Library**), or simply ignore the Contacts section
+if you only use the calendar features.
 
 **The screen still shows "Disconnect from Google" but signing in keeps
 failing.**
@@ -681,7 +628,7 @@ classification results, and any warnings.
 
 ---
 
-## 15. Privacy: what is sent to Google
+## 14. Privacy: what is sent to Google
 
 Calendar Bridge is built to be conservative about your data:
 
@@ -707,12 +654,12 @@ Calendar Bridge is built to be conservative about your data:
 When two-way sync is on for a calendar, the event details you create/edit in
 Nextcloud (title, time, location, description, recurrence, etc.) are sent to
 Google for that calendar — but **attendee/guest lists and reminders are not**
-pushed up. The **Contacts** and **Drive** importers (sections 9–10) only ever
-read *from* Google into Nextcloud.
+pushed up. The **Contacts** importer (section 9) only ever reads *from* Google
+into Nextcloud.
 
 ---
 
-## 16. For administrators
+## 15. For administrators
 
 Full setup lives in the [Install & Admin Guide](INSTALL.md). In short, the app
 adds an **admin** settings screen (also titled **"Google Synchronization"**)
@@ -722,9 +669,8 @@ where you:
   application" credential in the Google Cloud Console;
 - enter the **"Client ID"** and **"Client secret"**;
 - choose **"Use a pop-up to authenticate"** (pop-up) vs. the full-page redirect;
-- (for the inherited importers) enable the **Google Calendar API** and, only if
-  you want them, the **Google People API** (Contacts) and **Google Drive API**
-  (Drive) in **APIs & Services → Library**;
+- enable the **Google Calendar API** and, only if you want the inherited
+  Contacts importer, the **Google People API** in **APIs & Services → Library**;
 - and, if needed after an upgrade, use **"Delete all background jobs"** to clear
   every user's synchronization jobs (it warns: *"This will delete Calendar
   synchronization jobs for all users!"*).

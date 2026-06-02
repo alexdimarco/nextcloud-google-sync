@@ -21,8 +21,8 @@ That's exactly what this app does.
 
 This is a fork of [Google Integration][integration_google]
 that creates a background task that will periodically import all changes from Google Calendar to your Nextcloud calendar.
-As such, all functionality of [Google Integration][integration_google]
-is still implemented, so you can still import Contacts, Photos, Drive manually.
+It also keeps the upstream [Google Integration][integration_google] **Contacts**
+importer, so you can still import your Google contacts manually.
 However, currently, **only Google Calendar background synchronization is supported**.
 Please let me know if you would like to continuously synchronize other services.
 This also means that this app should not be used at the same time as [Google Integration][integration_google].

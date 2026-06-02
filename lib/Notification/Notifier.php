@@ -13,8 +13,6 @@
 namespace OCA\CalendarBridge\Notification;
 
 use InvalidArgumentException;
-use OCA\CalendarBridge\AppInfo\Application;
-use OCP\IURLGenerator;
 use OCP\L10N\IFactory;
 use OCP\Notification\INotification;
 use OCP\Notification\INotifier;
@@ -23,7 +21,6 @@ class Notifier implements INotifier {
 
 	public function __construct(
 		private IFactory $factory,
-		private IURLGenerator $url,
 	) {
 	}
 
@@ -59,24 +56,8 @@ class Notifier implements INotifier {
 			throw new InvalidArgumentException();
 		}
 
-		$l = $this->factory->get('outside_provider_calendar_bridge', $languageCode);
-
-		switch ($notification->getSubject()) {
-			case 'import_drive_finished':
-				/** @var array{nbImported?:string, targetPath: string} $p */
-				$p = $notification->getSubjectParameters();
-				$nbImported = (int)($p['nbImported'] ?? 0);
-				$targetPath = $p['targetPath'];
-				$content = $l->n('%n file was imported from Google Drive.', '%n files were imported from Google Drive.', $nbImported);
-
-				$notification->setParsedSubject($content)
-					->setIcon($this->url->getAbsoluteURL($this->url->imagePath(Application::APP_ID, 'app-dark.svg')))
-					->setLink($this->url->linkToRouteAbsolute('files.view.index', ['dir' => $targetPath]));
-				return $notification;
-
-			default:
-				// Unknown subject => Unknown notification => throw
-				throw new InvalidArgumentException();
-		}
+		// This app currently emits no user notifications, so any notification
+		// reaching here is unknown.
+		throw new InvalidArgumentException();
 	}
 }

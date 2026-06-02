@@ -168,104 +168,6 @@
 					</p>
 					<br>
 				</div>
-				<div v-if="showDrive"
-					id="google-drive">
-					<h3>{{ t('outside_provider_calendar_bridge', 'Drive') }}</h3>
-					<NcCheckboxRadioSwitch v-if="!importingDrive"
-						:model-value="!state.consider_shared_files"
-						@update:model-value="onDriveConsiderSharedChange">
-						{{ t('outside_provider_calendar_bridge', 'Ignore shared files') }}
-					</NcCheckboxRadioSwitch>
-					<div v-if="!importingDrive" class="line">
-						<label for="document-format">
-							<FileDocumentOutlineIcon />
-							{{ t('outside_provider_calendar_bridge', 'Google documents import format') }}
-						</label>
-						<select id="document-format"
-							v-model="state.document_format"
-							@change="onDocumentFormatChange">
-							<option value="openxml">
-								OpenXML (docx, xlsx, pptx)
-							</option>
-							<option value="opendoc">
-								OpenDocument (odt, ods, odp)
-							</option>
-						</select>
-						<br>
-					</div>
-					<div v-if="!importingDrive" class="line">
-						<label for="drive-output">
-							<FolderOutlineIcon />
-							{{ t('outside_provider_calendar_bridge', 'Import directory') }}
-						</label>
-						<input id="drive-output"
-							:readonly="true"
-							:value="state.drive_output_dir">
-						<NcButton class="edit-output-dir"
-							@click="onDriveOutputChange">
-							<template #icon>
-								<PencilOutlineIcon />
-							</template>
-						</NcButton>
-						<br><br>
-					</div>
-					<div v-if="!importingDrive && state.consider_shared_files" class="line">
-						<label for="drive-shared-with-me-output">
-							<FolderOutlineIcon />
-							{{ t('integration_google', 'Shared files import directory') }}
-						</label>
-						<input id="drive-shared-with-me-output"
-							:readonly="true"
-							:value="state.drive_shared_with_me_output_dir">
-						<NcButton class="edit-output-dir"
-							@click="onDriveSharedWithMeOutputChange">
-							<template #icon>
-								<PencilOutlineIcon />
-							</template>
-						</NcButton>
-						<br><br>
-					</div>
-					<div class="line">
-						<label v-if="state.consider_shared_files && sharedWithMeSize > 0">
-							<FileOutlineIcon />
-							{{ t('outside_provider_calendar_bridge',
-								'Your Google Drive ({formSize} + {formSharedSize} shared with you)',
-								{ formSize: myHumanFileSize(driveSize, true), formSharedSize: myHumanFileSize(sharedWithMeSize, true) }
-							)
-							}}
-						</label>
-						<label v-else>
-							<FileOutlineIcon />
-							{{ t('outside_provider_calendar_bridge', 'Your Google Drive ({formSize})', { formSize: myHumanFileSize(driveSize, true) }) }}
-						</label>
-						<NcButton v-if="enoughSpaceForDrive && !importingDrive"
-							id="google-import-files"
-							:disabled="gettingDriveInfo"
-							:class="{ loading: gettingDriveInfo }"
-							@click="onImportDrive">
-							<template #icon>
-								<GoogleDriveIcon />
-							</template>
-							{{ t('outside_provider_calendar_bridge', 'Import Google Drive files') }}
-						</NcButton>
-						<span v-else-if="!enoughSpaceForDrive">
-							{{ t('outside_provider_calendar_bridge', 'Your Google Drive is bigger than your remaining space left ({formSpace})', { formSpace: myHumanFileSize(state.free_space) }) }}
-						</span>
-					</div>
-					<div v-if="importingDrive">
-						<br>
-						{{ n('outside_provider_calendar_bridge', '{amount} file imported ({progress}%)', '{amount} files imported ({progress}%)', nbImportedFiles, { amount: nbImportedFiles, progress: driveImportProgress }) }}
-						<br>
-						{{ lastDriveImportDate }}
-						<br>
-						<NcButton @click="onCancelDriveImport">
-							<template #icon>
-								<CloseIcon />
-							</template>
-							{{ t('outside_provider_calendar_bridge', 'Cancel Google Drive import') }}
-						</NcButton>
-					</div>
-				</div>
 			</div>
 		</div>
 	</div>
@@ -274,27 +176,21 @@
 <script>
 import CheckIcon from 'vue-material-design-icons/Check.vue'
 import AccountGroupOutlineIcon from 'vue-material-design-icons/AccountGroupOutline.vue'
-import FileDocumentOutlineIcon from 'vue-material-design-icons/FileDocumentOutline.vue'
-import FileOutlineIcon from 'vue-material-design-icons/FileOutline.vue'
-import FolderOutlineIcon from 'vue-material-design-icons/FolderOutline.vue'
 import CloseIcon from 'vue-material-design-icons/Close.vue'
 import CalendarImportOutlineIcon from 'vue-material-design-icons/CalendarImportOutline.vue'
 import TrayArrowDownIcon from 'vue-material-design-icons/TrayArrowDown.vue'
 import AccountMultipleOutlineIcon from 'vue-material-design-icons/AccountMultipleOutline.vue'
-import PencilOutlineIcon from 'vue-material-design-icons/PencilOutline.vue'
-import GoogleDriveIcon from 'vue-material-design-icons/GoogleDrive.vue'
 
 import GoogleIcon from './icons/GoogleIcon.vue'
 
 import { loadState } from '@nextcloud/initial-state'
 import { generateUrl } from '@nextcloud/router'
 import axios from '@nextcloud/axios'
-import moment from '@nextcloud/moment'
 import { showSuccess, showError } from '@nextcloud/dialogs'
 import NcAppNavigationIconBullet from '@nextcloud/vue/components/NcAppNavigationIconBullet'
 import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
 import NcButton from '@nextcloud/vue/components/NcButton'
-import { humanFileSize, showServerError } from '../utils.js'
+import { showServerError } from '../utils.js'
 import GoogleIconColor from './icons/GoogleIconColor.vue'
 
 export default {
@@ -307,14 +203,9 @@ export default {
 		NcButton,
 		NcCheckboxRadioSwitch,
 		CloseIcon,
-		GoogleDriveIcon,
-		PencilOutlineIcon,
 		AccountMultipleOutlineIcon,
 		TrayArrowDownIcon,
 		CalendarImportOutlineIcon,
-		FolderOutlineIcon,
-		FileDocumentOutlineIcon,
-		FileOutlineIcon,
 		CheckIcon,
 		AccountGroupOutlineIcon,
 	},
@@ -343,15 +234,6 @@ export default {
 			selectedAddressBook: 0,
 			newAddressBookName: 'Google Contacts import',
 			importingContacts: false,
-			// drive
-			driveSize: 0,
-			gettingDriveInfo: false,
-			sharedWithMeSize: 0,
-			importingDrive: false,
-			lastDriveImportTimestamp: 0,
-			nbImportedFiles: 0,
-			driveImportedSize: 0,
-			driveImportLoop: null,
 		}
 	},
 
@@ -365,12 +247,6 @@ export default {
 		unsyncedCalendars() {
 			return this.calendars.filter(c => !c.isJobRegistered)
 		},
-		totalDriveSize() {
-			return this.driveSize + this.sharedWithMeSize
-		},
-		showDrive() {
-			return this.totalDriveSize > 0
-		},
 		selectedAddressBookName() {
 			return this.selectedAddressBook === 0
 				? this.newAddressBookName
@@ -380,20 +256,6 @@ export default {
 			return this.selectedAddressBook === 0
 				? null
 				: this.addressbooks[this.selectedAddressBook].uri
-		},
-		enoughSpaceForDrive() {
-			return this.driveSize === 0 || this.state.user_quota === 'none' || this.driveSize < this.state.free_space
-		},
-		lastDriveImportDate() {
-			return this.lastDriveImportTimestamp !== 0
-				? t('outside_provider_calendar_bridge', 'Last Google Drive import job at {date}', { date: moment.unix(this.lastDriveImportTimestamp).format('LLL') })
-				: t('outside_provider_calendar_bridge', 'Google Drive background import process will begin soon.') + ' '
-					+ t('outside_provider_calendar_bridge', 'You can close this page. You will be notified when it finishes.')
-		},
-		driveImportProgress() {
-			return this.driveSize > 0 && this.nbImportedFiles > 0
-				? parseInt(this.driveImportedSize / this.totalDriveSize * 100)
-				: 0
 		},
 	},
 
@@ -425,10 +287,6 @@ export default {
 				}
 				if (this.state.user_scopes.can_access_contacts) {
 					this.getNbGoogleContacts()
-				}
-				if (this.state.user_scopes.can_access_drive) {
-					this.getGoogleDriveInfo()
-					this.getDriveImportValues(true)
 				}
 			}
 		},
@@ -471,7 +329,6 @@ export default {
 				// unused. (calendar-level NC -> Google sync.)
 				'https://www.googleapis.com/auth/calendar.app.created',
 				'https://www.googleapis.com/auth/contacts.readonly',
-				'https://www.googleapis.com/auth/drive.readonly',
 				'https://www.googleapis.com/auth/contacts.other.readonly',
 			]
 			const requestUrl = 'https://accounts.google.com/o/oauth2/v2/auth?'
@@ -512,26 +369,6 @@ export default {
 					t('outside_provider_calendar_bridge', 'Failed to save Google OAuth state'),
 				)
 			})
-		},
-		getGoogleDriveInfo() {
-			this.gettingDriveInfo = true
-			const url = generateUrl('/apps/outside_provider_calendar_bridge/drive-size')
-			axios.get(url)
-				.then((response) => {
-					if (response.data && response.data.usageInDrive) {
-						this.driveSize = response.data.usageInDrive
-						this.sharedWithMeSize = response.data.sharedWithMeSize
-					}
-				})
-				.catch((error) => {
-					showServerError(
-						error,
-						t('outside_provider_calendar_bridge', 'Failed to get Google Drive information'),
-					)
-				})
-				.then(() => {
-					this.gettingDriveInfo = false
-				})
 		},
 		getGoogleCalendarList() {
 			const url = generateUrl('/apps/outside_provider_calendar_bridge/calendars')
@@ -819,141 +656,13 @@ export default {
 					this.loadingTwoWay[calId] = false
 				})
 		},
-		getDriveImportValues(launchLoop = false) {
-			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-files-info')
-			axios.get(url)
-				.then((response) => {
-					if (response.data && Object.keys(response.data).length > 0) {
-						this.lastDriveImportTimestamp = response.data.last_drive_import_timestamp
-						this.nbImportedFiles = response.data.nb_imported_files
-						this.driveImportedSize = response.data.drive_imported_size
-						this.importingDrive = response.data.importing_drive
-						if (!this.importingDrive) {
-							clearInterval(this.driveImportLoop)
-						} else if (launchLoop) {
-							// launch loop if we are currently importing AND it's the first time we call getDriveImportValues
-							this.driveImportLoop = setInterval(() => this.getDriveImportValues(), 10000)
-						}
-					}
-				})
-				.catch((error) => {
-					console.debug(error)
-				})
-				.then(() => {
-				})
-		},
-		onImportDrive() {
-			const req = {
-				params: {
-				},
-			}
-			const url = generateUrl('/apps/outside_provider_calendar_bridge/import-files')
-			axios.get(url, req)
-				.then((response) => {
-					const targetPath = response.data.targetPath
-					showSuccess(
-						t('outside_provider_calendar_bridge', 'Starting importing files in {targetPath} directory', { targetPath }),
-					)
-					this.getDriveImportValues(true)
-				})
-				.catch((error) => {
-					showServerError(
-						error,
-						t('outside_provider_calendar_bridge', 'Failed to start importing Google Drive'),
-					)
-				})
-		},
-		onCancelDriveImport() {
-			this.importingDrive = false
-			clearInterval(this.driveImportLoop)
-			const req = {
-				values: {
-					importing_drive: '0',
-					last_drive_import_timestamp: '0',
-					nb_imported_files: '0',
-					drive_imported_size: '0',
-				},
-			}
-			const url = generateUrl('/apps/outside_provider_calendar_bridge/config')
-			axios.put(url, req)
-				.then((response) => {
-				})
-				.catch((error) => {
-					console.debug(error)
-				})
-				.then(() => {
-				})
-		},
-		myHumanFileSize(bytes, approx = false, si = false, dp = 1) {
-			return humanFileSize(bytes, approx, si, dp)
-		},
 		onContactsConsiderOtherChange(newValue) {
 			this.state.consider_other_contacts = newValue
 			this.saveOptions({ consider_other_contacts: this.state.consider_other_contacts ? '1' : '0' }, this.getNbGoogleContacts)
 		},
-		onDriveConsiderSharedChange(newValue) {
-			this.state.consider_shared_files = !newValue
-			this.saveOptions({ consider_shared_files: this.state.consider_shared_files ? '1' : '0' }, this.getGoogleDriveInfo)
-		},
 		onConsiderAllEventsChange(newValue) {
 			this.state.consider_all_events = newValue
 			this.saveOptions({ consider_all_events: this.state.consider_all_events ? '0' : '1' })
-		},
-		onDocumentFormatChange(e) {
-			this.saveOptions({ document_format: this.state.document_format })
-		},
-		onDriveOutputChange() {
-			OC.dialogs.filepicker(
-				t('outside_provider_calendar_bridge', 'Choose where to write imported files'),
-				(targetPath) => {
-					if (targetPath === '') {
-						targetPath = '/'
-					}
-					const oldPath = this.state.drive_output_dir
-					this.state.drive_output_dir = targetPath
-					const options = { drive_output_dir: this.state.drive_output_dir }
-
-					if (this.state.drive_shared_with_me_output_dir.startsWith(oldPath)) {
-						let sharedWithMeFolder = this.state.drive_shared_with_me_output_dir.replace(oldPath, '')
-						if (sharedWithMeFolder.length > 0) {
-							if (this.state.drive_output_dir.endsWith('/')) {
-								// drop the leading slash in case the new path ends already with a slash (e.g. root)
-								sharedWithMeFolder = sharedWithMeFolder.substring(1)
-							} else if (!sharedWithMeFolder.startsWith('/')) {
-								// add a leading slash in case the old path ended with a slash (e.g. root)
-								sharedWithMeFolder = '/' + sharedWithMeFolder
-							}
-
-							this.state.drive_shared_with_me_output_dir = this.state.drive_output_dir + sharedWithMeFolder
-							options.drive_shared_with_me_output_dir = this.state.drive_shared_with_me_output_dir
-						}
-					}
-
-					this.saveOptions(options, (response) => {
-						if (response.data && response.data.free_space) {
-							this.state.free_space = response.data.free_space
-						}
-					})
-				},
-				false,
-				'httpd/unix-directory',
-				true,
-			)
-		},
-		onDriveSharedWithMeOutputChange() {
-			OC.dialogs.filepicker(
-				t('integration_google', 'Choose where to write imported "shared with me" files'),
-				(targetPath) => {
-					if (targetPath === '') {
-						targetPath = '/'
-					}
-					this.state.drive_shared_with_me_output_dir = targetPath
-					this.saveOptions({ drive_shared_with_me_output_dir: this.state.drive_shared_with_me_output_dir })
-				},
-				false,
-				'httpd/unix-directory',
-				true,
-			)
 		},
 	},
 }
@@ -1006,19 +715,6 @@ export default {
 		margin-inline-start: 10px;
 	}
 
-	#google-drive button,
-	#google-drive select {
-		width: 300px;
-		&#google-import-files {
-			height: 34px;
-		}
-	}
-
-  #google-drive input {
-    // remove right input margin and button width
-    width: calc(300px - 3px - var(--default-clickable-area));
-  }
-
 	#google-contacts {
 		select {
 			width: 300px;
@@ -1030,11 +726,6 @@ export default {
 
 	.check-option {
 		margin-inline-start: 5px;
-	}
-
-	.edit-output-dir {
-		height: 34px;
-		min-height: 34px;
 	}
 
 	.google-oauth {

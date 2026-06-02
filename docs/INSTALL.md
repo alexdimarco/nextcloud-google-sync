@@ -28,8 +28,9 @@ finished here.
 | **A Google account** | The account whose calendars you want to sync. |
 | **A Google Cloud project** | To create the OAuth client below. One project can serve all your users. |
 
-This fork uses **Google Calendar only**. The inherited Drive/Contacts/Photos code
-is dormant and not required.
+This fork is **calendar-focused**. The Google **Drive** importer has been
+removed; an inherited **Contacts** importer remains (optional — it needs the
+Google People API enabled).
 
 ---
 
@@ -160,7 +161,7 @@ occ background-job:execute <id> --force-execute
 | UI shows **Disconnect** but sync is broken / user can't re-consent | Clear the stale connection server-side, then have them reconnect: `occ user:setting <uid> outside_provider_calendar_bridge user_name ''`. |
 | Nothing syncs | Background jobs aren't running, or are set to *AJAX*. Switch to **Cron** and confirm system cron fires. |
 | App reports *needs upgrade* after an update | Run `occ upgrade`. |
-| 403 on Drive/Contacts | Expected — this fork is calendar-only and doesn't enable those APIs. |
+| 403 in the **Contacts** section | Expected unless you enabled the Google **People API** — the Contacts importer is optional and outside the calendar focus. |
 
 ---
 
