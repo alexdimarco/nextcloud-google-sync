@@ -251,6 +251,9 @@ class GoogleAPIService {
 			return [
 				'error' => 'Connection error: ' . $e->getMessage(),
 				'statusCode' => null,
+				// No HTTP response on a connect failure; keep 'body' present (null) so
+				// the error shape matches the >=400 paths for callers that read it.
+				'body' => null,
 				'retryAfter' => null,
 			];
 		}

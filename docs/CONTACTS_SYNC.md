@@ -188,6 +188,7 @@ Each phase follows the calendar cadence: **branch → lab validation → adversa
 - **Address-book ownership** — the sync and dedup entry points (`syncAddressBook`, `dedupeAddressBook`, `setSyncContacts`) verify the address book is owned by the calling user (via `getAddressBooksForUser`) before reading/writing/deleting cards, so a crafted `addressBookId` cannot touch another user's contacts.
 - **Groups (CATEGORIES) and photos out of v1 scope** — import-only as today; not round-tripped (group resource-name mapping and photo re-upload are their own subprojects).
 - **People API quota** — per-user 10k/day, 2400 QPM; batch endpoints (`batchCreate` 200, `batchUpdate` 200, `batchDelete` 500 per request) and exponential backoff on 429 keep large reconciles within budget. Sync (`syncToken`) quota is fixed/non-increasable — another reason to use incremental deltas, never full re-fetch.
+- **Concurrent inbound/outbound runs (C2b)** — `SyncContactsJob` runs the inbound then the outbound pass *sequentially* in one job, so they don't normally race. If misconfigured concurrency runs two jobs for the same address book at once, an inbound write landing between an outbound PATCH and its post-PATCH `nc_etag` re-read can record a stale `nc_etag`, costing **one** redundant (idempotent) re-PATCH next run before it converges. No data loss; a per-address-book lock is future hardening.
 
 ---
 

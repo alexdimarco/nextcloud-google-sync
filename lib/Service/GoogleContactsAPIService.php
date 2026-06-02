@@ -1459,13 +1459,13 @@ class GoogleContactsAPIService {
 	 *
 	 * @param array<string,mixed> $result the patch response Person
 	 */
-	private function recordUpdateBaselines(int $addressBookId, string $cardUri, string $resourceName, array $result): void {
+	private function recordUpdateBaselines(int $addressBookId, string $cardUri, string $resourceName, array $result): bool {
 		$etag = isset($result['etag']) ? (string)$result['etag'] : null;
 		$sources = (is_array($result['metadata'] ?? null) && is_array($result['metadata']['sources'] ?? null))
 			? $result['metadata']['sources'] : [];
 		$updateTime = (isset($sources[0]) && is_array($sources[0])) ? ($sources[0]['updateTime'] ?? null) : null;
 		$fresh = $this->cdBackend->getCard($addressBookId, $cardUri);
-		$this->contactMapService->recordMapping(
+		$recorded = $this->contactMapService->recordMapping(
 			$addressBookId,
 			$cardUri,
 			$resourceName,
@@ -1475,6 +1475,20 @@ class GoogleContactsAPIService {
 			is_array($fresh) ? (string)($fresh['etag'] ?? '') : null,
 			'nc',
 		);
+		if (!$recorded) {
+			// The PATCH succeeded (Google holds NC's data) but we couldn't refresh the
+			// echo baselines. We deliberately do NOT hold the token: the write already
+			// landed, so holding would re-PATCH the same card every run (a write loop)
+			// — whereas advancing lets the next INBOUND pull (incoming etag != the
+			// stale baseline) re-apply Google's now-identical version and refresh the
+			// baselines, self-healing in one cycle. Surface it for operators.
+			$this->logger->warning(
+				'Calendar Bridge: outbound update for ' . $cardUri . ' patched Google ' . $resourceName
+					. ' but FAILED to refresh the map baselines; inbound will reconcile next pull',
+				['app' => Application::APP_ID],
+			);
+		}
+		return $recorded;
 	}
 
 	/**
@@ -1509,10 +1523,12 @@ class GoogleContactsAPIService {
 			return self::CONFLICT;
 		}
 		$ncLastmod = isset($card['lastmodified']) ? (int)$card['lastmodified'] : null;
-		$liveTs = self::parseGoogleTimestamp(
-			isset($live['metadata']['sources'][0]['updateTime']) ? (string)$live['metadata']['sources'][0]['updateTime'] : null,
-		);
-		$winner = self::resolveConflictContact($ncLastmod, $liveTs === 0 ? null : $liveTs);
+		// Decide missing-vs-present BEFORE parsing: a genuinely absent updateTime is
+		// "unknown" (-> google_wins, the safe default), but a real timestamp that
+		// happens to parse to 0 (epoch) is still a valid time, not a parse failure.
+		$updateTimeStr = isset($live['metadata']['sources'][0]['updateTime']) ? (string)$live['metadata']['sources'][0]['updateTime'] : null;
+		$liveTs = $updateTimeStr === null ? null : self::parseGoogleTimestamp($updateTimeStr);
+		$winner = self::resolveConflictContact($ncLastmod, $liveTs);
 		if ($winner !== 'nc_wins') {
 			// Google wins. Do NOT refresh the baseline — leaving baseline_etag at the
 			// OLD value is what lets the next inbound pull (incoming etag != baseline)
