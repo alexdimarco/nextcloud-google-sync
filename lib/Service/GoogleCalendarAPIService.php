@@ -730,9 +730,16 @@ class GoogleCalendarAPIService {
 
 		// Phase-0 bidirectional-sync observability: lazily seed the event map
 		// from existing imported objects the first time (steady-state sync
-		// skips unchanged events and would never record them). Purely
-		// additive — no behavior change to the one-way import.
-		$this->eventMapService->seedFromExistingIfEmpty($ncCalId, $existingObjects);
+		// skips unchanged events and would never record them). Gated on the
+		// calendar's origin: an NC-origin pairing's existing events are LOCAL
+		// (the reconciler pushes them), NOT google echoes to baseline — seeding
+		// them as 'google' would silently strand them one-way. Only seed a
+		// confirmed Google-origin import.
+		$this->eventMapService->seedFromExistingIfEmpty(
+			$ncCalId,
+			$existingObjects,
+			$this->calendarMapService->hasNcOriginPairing($calId),
+		);
 
 		// get color list
 		$eventColors = [];

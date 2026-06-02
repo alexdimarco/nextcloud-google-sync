@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.13.1]
+
+### Fixed
+
+- **NC-origin calendar pairings now sync new events out to Google.** When you
+  link an existing Nextcloud calendar to a freshly created (empty) Google
+  calendar, events you add in Nextcloud were being silently treated as
+  already-synced Google imports and never pushed. The one-time event-map
+  backfill assumed every existing object was a Google import (an echo to skip);
+  it is now origin-aware and only baselines genuine Google-origin imports, so an
+  NC-origin calendar's local events are correctly pushed by the reconciler.
+  (Google-origin import calendars are unaffected.)
+
 ## [4.13.0]
 
 ### Added
